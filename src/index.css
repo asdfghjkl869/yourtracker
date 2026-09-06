@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0f19;
+  --card-bg: #161b22;
+  --card-bg-elevated: #1c2129;
+  --text: #f0f6fc;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-muted: rgba(88, 166, 255, 0.15);
+  --success: #238636;
+  --warning: #d29922;
+  --danger: #f85149;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-focus: rgba(88, 166, 255, 0.4);
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Bento Grid Design System */
+.bento-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.2s ease-in-out;
+}
+
+.bento-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.card-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.progress-bar-container {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease-out;
+}
+
+.habit-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 8px;
+  border-left: 3px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.habit-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.habit-item.done {
+  border-left-color: var(--success);
+}
+
+.trend-bar {
+  flex: 1;
+  background: var(--accent);
+  opacity: 0.35;
+  border-radius: 4px 4px 0 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.trend-bar:hover,
+.trend-bar.active {
+  opacity: 1;
+}
+
+.sleep-circle {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  border: 8px solid rgba(255, 255, 255, 0.06);
+  border-top-color: var(--warning);
+  border-right-color: var(--warning);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: auto;
+  transition: all 0.3s ease;
+}
+
+/* Base slate mappings to match dark bento palette */
+.bg-slate-900,
+.bg-slate-900\/90,
+.bg-slate-900\/80,
+.bg-slate-900\/60 {
+  background-color: #161b22;
+}
+
+.bg-slate-950,
+.bg-slate-950\/90,
+.bg-slate-950\/80,
+.bg-slate-950\/60,
+.bg-slate-950\/50,
+.bg-slate-950\/40 {
+  background-color: #0d1117;
+}
+
+.border-slate-800,
+.border-slate-800\/80,
+.border-slate-800\/60 {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.border-slate-700,
+.border-slate-700\/60 {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Light theme overrides for toggle support */
+body.light-theme {
+  --bg: #f6f8fa;
+  --card-bg: #ffffff;
+  --card-bg-elevated: #f3f4f6;
+  --text: #1f2328;
+  --text-muted: #656d76;
+  --border: #d0d7de;
+  background-color: #f6f8fa;
+  color: #1f2328;
+}
+
+body.light-theme .bento-card {
+  background: #ffffff;
+  border-color: #d0d7de;
+}
+
+body.light-theme .card-title {
+  color: #656d76;
+}
+
+body.light-theme .habit-item {
+  background: #f6f8fa;
+}
+
+body.light-theme .sleep-circle {
+  border-color: #e1e4e8;
+  border-top-color: #d29922;
+  border-right-color: #d29922;
+}
+
+body.light-theme .bg-slate-900,
+body.light-theme .bg-slate-950,
+body.light-theme .bg-slate-900\/90,
+body.light-theme .bg-slate-900\/80,
+body.light-theme .bg-slate-900\/60,
+body.light-theme .bg-slate-950\/80,
+body.light-theme .bg-slate-950\/60,
+body.light-theme .bg-slate-950\/50,
+body.light-theme .bg-slate-950\/40 {
+  background-color: #ffffff !important;
+  border-color: #d0d7de !important;
+  color: #1f2328 !important;
+}
+
+body.light-theme .bg-slate-800,
+body.light-theme .bg-slate-850 {
+  background-color: #f6f8fa !important;
+  border-color: #d0d7de !important;
+  color: #24292f !important;
+}
+
+body.light-theme .text-white,
+body.light-theme .text-slate-100 {
+  color: #1f2328 !important;
+}
+
+body.light-theme .text-slate-200 {
+  color: #24292f !important;
+}
+
+body.light-theme .text-slate-300 {
+  color: #424a53 !important;
+}
+
+body.light-theme .text-slate-400,
+body.light-theme .text-slate-500 {
+  color: #656d76 !important;
+}
+
+body.light-theme .border-slate-800,
+body.light-theme .border-slate-700 {
+  border-color: #d0d7de !important;
+}

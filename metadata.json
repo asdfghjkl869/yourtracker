@@ -1,0 +1,6 @@
+{
+  "name": "UMANG Bhaiya — CBSE Study Tracker",
+  "description": "CBSE Class 9 & 10 study tracker with exam day countdown, study sessions, subject habits, sleep monitor, and weekly analytics dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
