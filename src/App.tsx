@@ -1,5 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile, SubjectName, TabType, StudySession, DailySleepLog, Chapter } from './types';
+import {
+  UserProfile,
+  SubjectName,
+  TabType,
+  StudySession,
+  DailySleepLog,
+  Chapter,
+  DailyPlan,
+  DailyTask,
+  CalendarBlock,
+  MistakeEntry,
+  EnergyLevel,
+  ExamMode,
+  ChapterDifficulty
+} from './types';
 import { SUBJECTS, generateSampleInitialProfile, DEFAULT_STAGES, SYLLABUS_DATA } from './data/cbseData';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
@@ -12,7 +26,28 @@ import { ChaptersView } from './components/ChaptersView';
 import { SettingsView } from './components/SettingsView';
 import { ResourcesView } from './components/ResourcesView';
 import { SetupWizard } from './components/SetupWizard';
-import { Sparkles, Play, Moon, CheckSquare, Zap, BookOpen, Flame } from 'lucide-react';
+import { TimeBlockingCalendar } from './components/TimeBlockingCalendar';
+import { MistakeJournal } from './components/MistakeJournal';
+import { DailyPlanModal } from './components/DailyPlanModal';
+import { EnergyCheckinModal } from './components/EnergyCheckinModal';
+import { PanicModeBanner } from './components/PanicModeBanner';
+import { SyllabusPredictorCard } from './components/SyllabusPredictorCard';
+import { DailyStudyChart } from './components/DailyStudyChart';
+import { getDaysRemaining } from './utils/helpers';
+import {
+  Sparkles,
+  Play,
+  Moon,
+  CheckSquare,
+  Zap,
+  BookOpen,
+  Flame,
+  Calendar,
+  AlertTriangle,
+  Clock,
+  CheckCircle2,
+  Plus
+} from 'lucide-react';
 
 const STORAGE_KEY = 'umang_cbse_profiles';
 const ACTIVE_PROFILE_KEY = 'umang_cbse_active_id';
@@ -27,6 +62,13 @@ export default function App() {
   // Cross-component navigation state
   const [targetSubjectForChapters, setTargetSubjectForChapters] = useState<SubjectName>('Mathematics');
   const [targetSubjectForSession, setTargetSubjectForSession] = useState<SubjectName>('Mathematics');
+  const [targetSubjectForMistakes, setTargetSubjectForMistakes] = useState<SubjectName>('Mathematics');
+  const [targetChapterForMistakes, setTargetChapterForMistakes] = useState<string>('');
+
+  // Feature Modals & Alerts
+  const [showDailyPlanModal, setShowDailyPlanModal] = useState<boolean>(false);
+  const [showEnergyModal, setShowEnergyModal] = useState<boolean>(false);
+  const [panicDismissed, setPanicDismissed] = useState<boolean>(false);
 
   // Setup Wizard
   const [showWizard, setShowWizard] = useState<boolean>(false);
@@ -583,6 +625,277 @@ export default function App() {
     }
   };
 
+  // --- Handlers for Daily Plan Generator & Daily Quest ---
+  const handleSaveDailyPlan = (plan: DailyPlan) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            dailyPlans: {
+              ...(p.dailyPlans || {}),
+              [plan.date]: plan
+            }
+          };
+        }
+        return p;
+      })
+    );
+    setShowDailyPlanModal(false);
+    showNotification("Today's study plan saved and synced to Daily Quest! 🎯");
+  };
+
+  const handleToggleDailyTask = (taskId: string) => {
+    if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
+    const plan = activeProfile.dailyPlans?.[today];
+    if (!plan) return;
+
+    const updatedTasks = plan.tasks.map(t => {
+      if (t.id === taskId) {
+        return { ...t, isCompleted: !t.isCompleted };
+      }
+      return t;
+    });
+
+    const isNowDone = updatedTasks.find(t => t.id === taskId)?.isCompleted;
+
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            dailyPlans: {
+              ...(p.dailyPlans || {}),
+              [today]: {
+                ...plan,
+                tasks: updatedTasks
+              }
+            }
+          };
+        }
+        return p;
+      })
+    );
+
+    if (isNowDone) {
+      showNotification('Quest task completed! +25 XP 🌟');
+    }
+  };
+
+  const handleSyncPlanToCalendar = (tasks: DailyTask[]) => {
+    if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
+    let startHour = 9;
+
+    const newBlocks: CalendarBlock[] = tasks.map(t => {
+      const sh = String(startHour).padStart(2, '0');
+      const eh = String(startHour + 1).padStart(2, '0');
+      startHour = (startHour + 2) % 23;
+      return {
+        id: 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        date: today,
+        startTime: `${sh}:00`,
+        endTime: `${eh}:30`,
+        subject: t.subject,
+        chapterName: t.chapterName,
+        title: t.title || t.taskTitle || 'Study Task',
+        isCompleted: t.isCompleted ?? t.completed ?? false
+      };
+    });
+
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            calendarBlocks: [...(p.calendarBlocks || []), ...newBlocks]
+          };
+        }
+        return p;
+      })
+    );
+    showNotification(`Synced ${newBlocks.length} blocks to Calendar Planner! 📅`);
+  };
+
+  // --- Handlers for Daily Energy & Exam Mode ---
+  const handleSaveEnergyCheckin = (energy: EnergyLevel) => {
+    if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            energyLevel: energy,
+            lastEnergyCheckinDate: today
+          };
+        }
+        return p;
+      })
+    );
+    setShowEnergyModal(false);
+    showNotification(`Energy logged as ${energy}! Study pace adjusted. ⚡`);
+  };
+
+  const handleToggleExamMode = () => {
+    if (!activeProfile) return;
+    const cycle: Record<string, ExamMode> = {
+      'Standard': 'Exam Mode',
+      'Exam Mode': 'Panic Mode',
+      'Panic Mode': 'Standard'
+    };
+    const currentMode = activeProfile.examMode || 'Standard';
+    const nextMode: ExamMode = cycle[currentMode] || 'Standard';
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            examMode: nextMode
+          };
+        }
+        return p;
+      })
+    );
+    showNotification(`Switched mode to: ${nextMode}`);
+  };
+
+  // --- Handlers for Mistake Journal ---
+  const handleAddMistake = (mistakeData: Omit<MistakeEntry, 'id'>) => {
+    if (!activeProfile) return;
+    const newEntry: MistakeEntry = {
+      ...mistakeData,
+      id: 'mst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)
+    };
+
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            mistakes: [newEntry, ...(p.mistakes || [])]
+          };
+        }
+        return p;
+      })
+    );
+    showNotification(`Logged mistake in ${mistakeData.subject} • Chapter tagged ⚠️`);
+  };
+
+  const handleToggleResolvedMistake = (id: string) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          const updated = (p.mistakes || []).map(m => {
+            if (m.id === id) {
+              return {
+                ...m,
+                isResolved: !m.isResolved,
+                resolvedDate: !m.isResolved ? new Date().toISOString().split('T')[0] : undefined
+              };
+            }
+            return m;
+          });
+          return { ...p, mistakes: updated };
+        }
+        return p;
+      })
+    );
+  };
+
+  const handleDeleteMistake = (id: string) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            mistakes: (p.mistakes || []).filter(m => m.id !== id)
+          };
+        }
+        return p;
+      })
+    );
+    showNotification('Mistake entry removed.');
+  };
+
+  // --- Handlers for Time Blocking Calendar ---
+  const handleAddCalendarBlock = (blockData: Omit<CalendarBlock, 'id'>) => {
+    if (!activeProfile) return;
+    const newBlock: CalendarBlock = {
+      ...blockData,
+      id: 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)
+    };
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            calendarBlocks: [...(p.calendarBlocks || []), newBlock]
+          };
+        }
+        return p;
+      })
+    );
+    showNotification(`Scheduled study block for ${blockData.subject}! ⏰`);
+  };
+
+  const handleDeleteCalendarBlock = (id: string) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            calendarBlocks: (p.calendarBlocks || []).filter(b => b.id !== id)
+          };
+        }
+        return p;
+      })
+    );
+    showNotification('Study block removed.');
+  };
+
+  const handleUpdateCalendarBlock = (updated: CalendarBlock) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            calendarBlocks: (p.calendarBlocks || []).map(b => (b.id === updated.id ? updated : b))
+          };
+        }
+        return p;
+      })
+    );
+  };
+
+  const handleToggleDifficulty = (subject: SubjectName, chapterId: string, diff: ChapterDifficulty) => {
+    if (!activeProfile) return;
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          const subData = p.subjects[subject];
+          if (!subData) return p;
+          const updated = subData.chapters.map(c => (c.id === chapterId ? { ...c, difficulty: diff } : c));
+          return {
+            ...p,
+            subjects: {
+              ...p.subjects,
+              [subject]: { ...subData, chapters: updated }
+            }
+          };
+        }
+        return p;
+      })
+    );
+    showNotification(`Set ${subject} chapter to ${diff} difficulty!`);
+  };
+
   // Smart Focus items for Today's Focus box (as in screenshots)
   const getSmartFocusItems = () => {
     if (!activeProfile) return [];
@@ -644,6 +957,9 @@ export default function App() {
 
   const todayStr = new Date().toISOString().split('T')[0];
   const todaySleepLog = activeProfile?.sleepLogs ? activeProfile.sleepLogs[todayStr] : undefined;
+  const todayDailyPlan = activeProfile?.dailyPlans ? activeProfile.dailyPlans[todayStr] : undefined;
+  const unresolvedMistakesCount = (activeProfile?.mistakes || []).filter(m => !m.isResolved).length;
+  const todayBlocksCount = (activeProfile?.calendarBlocks || []).filter(b => b.date === todayStr).length;
 
   return (
     <div className="min-h-screen pb-24 text-slate-100 transition-colors duration-200">
@@ -656,6 +972,8 @@ export default function App() {
         isDark={isDark}
         onToggleTheme={handleToggleTheme}
         onTabChange={tab => setActiveTab(tab)}
+        onOpenEnergyCheckin={() => setShowEnergyModal(true)}
+        onToggleExamMode={handleToggleExamMode}
       />
 
       {/* Main Container */}
@@ -663,7 +981,23 @@ export default function App() {
         {/* TAB 1: HOME */}
         {activeTab === 'home' && activeProfile && (
           <div className="space-y-5">
-            {/* Student Greeting & Streak (Bento Header) */}
+            {/* Panic Mode / Critical Countdown Alert */}
+            {!panicDismissed && (activeProfile.examMode === 'Panic Mode' || Object.values(activeProfile.subjects).some(s => {
+              const subData = s as { examDate?: string };
+              const d = getDaysRemaining(subData?.examDate || '');
+              return d <= 5 && d >= 0;
+            })) && (
+              <PanicModeBanner
+                profile={activeProfile}
+                onNavigateToChapters={sub => {
+                  setTargetSubjectForChapters(sub);
+                  setActiveTab('chapters');
+                }}
+                onTogglePanicManual={handleToggleExamMode}
+              />
+            )}
+
+            {/* Student Greeting & Streak & Quick Generator Actions */}
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
               <div>
                 <h1 className="text-2xl font-black tracking-tight text-[#f0f6fc] sm:text-3xl">
@@ -674,11 +1008,30 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2.5">
-                <div className="rounded-full border border-white/10 bg-[#161b22] px-3.5 py-1 text-xs font-semibold text-[#f0f6fc]">
-                  Study Streak: <span className="font-bold text-[#d29922]">{activeProfile.streak || 6} Days</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Prominent Auto Daily Plan Generator Button */}
+                <button
+                  onClick={() => setShowDailyPlanModal(true)}
+                  className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-[#58a6ff] to-[#388bfd] px-3.5 py-1.5 text-xs font-black text-[#0b0f19] shadow-lg shadow-sky-500/20 hover:brightness-110 active:scale-95 transition-all"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>Generate Today's Plan</span>
+                </button>
+
+                {/* Energy Check-in quick badge */}
+                <button
+                  onClick={() => setShowEnergyModal(true)}
+                  className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#161b22] px-3 py-1.5 text-xs font-semibold text-[#f0f6fc] hover:border-white/20 transition-colors"
+                  title="Daily Energy Check-in"
+                >
+                  <span>{activeProfile.energyLevel === 'High' ? '⚡' : activeProfile.energyLevel === 'Low' ? '🪫' : '🔋'}</span>
+                  <span className="font-bold">{activeProfile.energyLevel || 'Medium'} Energy</span>
+                </button>
+
+                <div className="rounded-full border border-white/10 bg-[#161b22] px-3.5 py-1.5 text-xs font-semibold text-[#f0f6fc]">
+                  Streak: <span className="font-bold text-[#d29922]">{activeProfile.streak || 6} Days</span>
                 </div>
-                <div className="rounded-full bg-[#58a6ff]/15 px-3 py-1 text-xs font-bold text-[#58a6ff]">
+                <div className="rounded-full bg-[#58a6ff]/15 px-3 py-1.5 text-xs font-bold text-[#58a6ff]">
                   {activeProfile.classLevel}
                 </div>
               </div>
@@ -694,78 +1047,155 @@ export default function App() {
               }}
             />
 
+            {/* Feature 4: Syllabus Completion Predictor & Burnout Gauge */}
+            <SyllabusPredictorCard
+              profile={activeProfile}
+              onNavigateToChapters={sub => {
+                setTargetSubjectForChapters(sub);
+                setActiveTab('chapters');
+              }}
+            />
+
             {/* Bento Grid: Modular cards for Quest, Sleep, Progress & Habits */}
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-              {/* Left Column: 7 Subject Cards with Visual Progress Bars (Priority 3) */}
-              <div className="lg:col-span-8 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="card-title m-0">
-                    <span>🎯</span>
-                    <span>Subject Progress & Visual Tracking</span>
-                  </div>
-                  <span className="text-xs font-semibold text-[#8b949e]">
-                    7 CBSE Subjects
-                  </span>
-                </div>
+              {/* Left Column: Daily Study Chart + 7 Subject Cards with Visual Progress Bars */}
+              <div className="lg:col-span-8 space-y-5">
+                {/* Feature 7: Daily Study Chart / Day View */}
+                <DailyStudyChart profile={activeProfile} />
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {SUBJECTS.map(sub => (
-                    <SubjectCard
-                      key={sub}
-                      subject={sub}
-                      profile={activeProfile}
-                      onSelectSubject={selectedSub => {
-                        setTargetSubjectForChapters(selectedSub);
-                        setActiveTab('chapters');
-                      }}
-                      onStartStudySession={selectedSub => {
-                        setTargetSubjectForSession(selectedSub);
-                        setActiveTab('sessions');
-                      }}
-                    />
-                  ))}
+                {/* Subject Progress & Visual Tracking */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="card-title m-0">
+                      <span>🎯</span>
+                      <span>Subject Progress & Visual Tracking</span>
+                    </div>
+                    <span className="text-xs font-semibold text-[#8b949e]">
+                      7 CBSE Subjects
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {SUBJECTS.map(sub => (
+                      <SubjectCard
+                        key={sub}
+                        subject={sub}
+                        profile={activeProfile}
+                        onSelectSubject={selectedSub => {
+                          setTargetSubjectForChapters(selectedSub);
+                          setActiveTab('chapters');
+                        }}
+                        onStartStudySession={selectedSub => {
+                          setTargetSubjectForSession(selectedSub);
+                          setActiveTab('sessions');
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {/* Right Column: Bento Modules (Today's Focus Quest, Sleep Monitor, Habits) */}
+              {/* Right Column: Bento Modules (Today's Focus Quest, Sleep Monitor, Mistakes, Calendar) */}
               <div className="lg:col-span-4 space-y-5">
-                {/* Bento Card 1: Day Tracker / Focus Quest */}
+                {/* Bento Card 1: Day Tracker / Daily Quest */}
                 <div className="bento-card">
-                  <div className="card-title">
-                    <span>📅</span>
-                    <span>Day Tracker: Daily Quest</span>
+                  <div className="flex items-center justify-between">
+                    <div className="card-title m-0">
+                      <span>📅</span>
+                      <span>Day Tracker: Daily Quest</span>
+                    </div>
+                    <button
+                      onClick={() => setShowDailyPlanModal(true)}
+                      className="text-xs font-bold text-[#58a6ff] hover:underline"
+                    >
+                      {todayDailyPlan ? 'Edit Plan' : 'Auto Plan'}
+                    </button>
                   </div>
-                  <p className="mt-[-6px] mb-3 text-xs text-[#8b949e]">
-                    Priority chapters scheduled based on CBSE datesheet pace.
+                  <p className="mt-1 mb-3 text-xs text-[#8b949e]">
+                    {todayDailyPlan
+                      ? `Generated plan for ${todayDailyPlan.energyLevel} energy (${todayDailyPlan.targetHours} hrs)`
+                      : 'Priority chapters scheduled based on CBSE datesheet pace.'}
                   </p>
 
-                  <div className="space-y-2">
-                    {getSmartFocusItems().map((item, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => handleCycleStage(item.subject, item.chapterId, item.stageIdx)}
-                        className={`habit-item cursor-pointer ${item.isProgress ? 'done' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={item.isProgress}
-                          onChange={() => {}}
-                          className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
-                        />
-                        <div className="flex-grow min-w-0">
-                          <div className="text-xs font-bold text-[#f0f6fc] truncate">
-                            {item.subject} • {item.chapterName.split(':')[0] || item.chapterName}
+                  {/* Tasks List */}
+                  {todayDailyPlan && todayDailyPlan.tasks.length > 0 ? (
+                    <div className="space-y-2">
+                      {todayDailyPlan.tasks.map(task => (
+                        <div
+                          key={task.id}
+                          onClick={() => handleToggleDailyTask(task.id)}
+                          className={`habit-item cursor-pointer ${task.isCompleted ? 'done' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={task.isCompleted}
+                            onChange={() => {}}
+                            className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
+                          />
+                          <div className="flex-grow min-w-0">
+                            <div className="text-xs font-bold text-[#f0f6fc] truncate">
+                              {task.subject} • {task.title}
+                            </div>
+                            <div className="text-[11px] text-[#8b949e] truncate">
+                              {task.estimatedMinutes} mins • {task.reason}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-[#8b949e] truncate">
-                            {item.stageName}
-                          </div>
+                          <span
+                            className={`text-[10px] font-bold shrink-0 ${
+                              task.isCompleted ? 'text-[#3fb950]' : 'text-[#8b949e]'
+                            }`}
+                          >
+                            {task.isCompleted ? '+25 XP' : `${task.estimatedMinutes}m`}
+                          </span>
                         </div>
-                        <span className={`text-[10px] font-bold shrink-0 ${item.isProgress ? 'text-[#3fb950]' : 'text-[#8b949e]'}`}>
-                          {item.isProgress ? '+15 XP' : 'Pending'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+
+                      {/* Sync to Calendar button if tasks exist */}
+                      <button
+                        onClick={() => handleSyncPlanToCalendar(todayDailyPlan.tasks)}
+                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] py-2 text-xs font-bold text-[#58a6ff] hover:bg-white/[0.06]"
+                      >
+                        <Calendar className="h-3.5 w-3.5" />
+                        Sync Plan to Calendar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {getSmartFocusItems().map((item, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => handleCycleStage(item.subject, item.chapterId, item.stageIdx)}
+                          className={`habit-item cursor-pointer ${item.isProgress ? 'done' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.isProgress}
+                            onChange={() => {}}
+                            className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
+                          />
+                          <div className="flex-grow min-w-0">
+                            <div className="text-xs font-bold text-[#f0f6fc] truncate">
+                              {item.subject} • {item.chapterName.split(':')[0] || item.chapterName}
+                            </div>
+                            <div className="text-[11px] text-[#8b949e] truncate">
+                              {item.stageName}
+                            </div>
+                          </div>
+                          <span className={`text-[10px] font-bold shrink-0 ${item.isProgress ? 'text-[#3fb950]' : 'text-[#8b949e]'}`}>
+                            {item.isProgress ? '+15 XP' : 'Pending'}
+                          </span>
+                        </div>
+                      ))}
+
+                      <button
+                        onClick={() => setShowDailyPlanModal(true)}
+                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#58a6ff] to-[#388bfd] py-2 text-xs font-bold text-[#0b0f19] hover:brightness-110"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Generate Today's Plan (4-7 Tasks)
+                      </button>
+                    </div>
+                  )}
 
                   <button
                     onClick={() => {
@@ -775,7 +1205,7 @@ export default function App() {
                       }
                       setActiveTab('sessions');
                     }}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#58a6ff] py-2.5 text-xs font-bold text-[#0b0f19] transition-all hover:bg-sky-400"
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#58a6ff] py-2.5 text-xs font-bold text-[#0b0f19] transition-all hover:bg-sky-400"
                   >
                     <Play className="h-3.5 w-3.5 fill-current" />
                     Start Study Session Now
@@ -826,7 +1256,63 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Bento Card 3: Daily Subject Habits */}
+                {/* Bento Card 3: Mistake Journal Quick Card */}
+                <div className="bento-card">
+                  <div className="flex items-center justify-between">
+                    <div className="card-title m-0">
+                      <span>⚠️</span>
+                      <span>Mistake Journal</span>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('mistakes')}
+                      className="text-xs font-bold text-[#58a6ff] hover:underline"
+                    >
+                      View All
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-[#8b949e]">
+                    {unresolvedMistakesCount > 0
+                      ? `${unresolvedMistakesCount} unresolved mistake${unresolvedMistakesCount === 1 ? '' : 's'} boosting chapter priorities.`
+                      : 'All mistakes resolved! Keep logging tricky test questions.'}
+                  </p>
+                  <button
+                    onClick={() => setActiveTab('mistakes')}
+                    className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] py-2 text-xs font-bold text-[#f0f6fc] transition-colors hover:border-[#f85149]/40 hover:text-[#f85149]"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 text-[#d29922]" />
+                    Open Mistake Journal ({unresolvedMistakesCount}) →
+                  </button>
+                </div>
+
+                {/* Bento Card 4: Time Blocking Calendar Quick Card */}
+                <div className="bento-card">
+                  <div className="flex items-center justify-between">
+                    <div className="card-title m-0">
+                      <span>🗓️</span>
+                      <span>Calendar Planner</span>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('planner')}
+                      className="text-xs font-bold text-[#58a6ff] hover:underline"
+                    >
+                      Planner
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-[#8b949e]">
+                    {todayBlocksCount > 0
+                      ? `${todayBlocksCount} time block${todayBlocksCount === 1 ? '' : 's'} scheduled for today.`
+                      : 'Drag & schedule study time blocks across weekly slots.'}
+                  </p>
+                  <button
+                    onClick={() => setActiveTab('planner')}
+                    className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] py-2 text-xs font-bold text-[#f0f6fc] transition-colors hover:border-[#58a6ff]/40 hover:text-[#58a6ff]"
+                  >
+                    <Calendar className="h-3.5 w-3.5 text-[#58a6ff]" />
+                    Open Weekly Calendar ({todayBlocksCount} blocks) →
+                  </button>
+                </div>
+
+                {/* Bento Card 5: Daily Subject Habits */}
                 <div className="bento-card">
                   <div className="flex items-center justify-between">
                     <div className="card-title m-0">
@@ -856,7 +1342,19 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: CHAPTERS VIEW */}
+        {/* TAB 2: TIME BLOCKING CALENDAR / PLANNER (FEATURE 2) */}
+        {activeTab === 'planner' && activeProfile && (
+          <TimeBlockingCalendar
+            profile={activeProfile}
+            onAddBlock={handleAddCalendarBlock}
+            onDeleteBlock={handleDeleteCalendarBlock}
+            onUpdateBlock={handleUpdateCalendarBlock}
+            onAddSession={handleAddSession}
+            onOpenDailyPlan={() => setShowDailyPlanModal(true)}
+          />
+        )}
+
+        {/* TAB 3: CHAPTERS VIEW (FEATURE 3 & DIFFICULTY TAGS) */}
         {activeTab === 'chapters' && activeProfile && (
           <ChaptersView
             profile={activeProfile}
@@ -868,10 +1366,32 @@ export default function App() {
             onRenameChapter={handleRenameChapter}
             onAddChapter={handleAddChapter}
             onRestoreCBSE={handleRestoreCBSE}
+            onToggleDifficulty={handleToggleDifficulty}
+            onNavigateToMistakes={(sub, ch) => {
+              setTargetSubjectForMistakes(sub);
+              setTargetChapterForMistakes(ch);
+              setActiveTab('mistakes');
+            }}
           />
         )}
 
-        {/* TAB 3: STUDY SESSIONS & HABITS (PRIORITY 2) */}
+        {/* TAB 4: MISTAKE JOURNAL (FEATURE 5) */}
+        {activeTab === 'mistakes' && activeProfile && (
+          <MistakeJournal
+            profile={activeProfile}
+            initialSubject={targetSubjectForMistakes}
+            initialChapter={targetChapterForMistakes}
+            onAddMistake={handleAddMistake}
+            onToggleResolved={handleToggleResolvedMistake}
+            onDeleteMistake={handleDeleteMistake}
+            onNavigateToChapter={(sub, ch) => {
+              setTargetSubjectForChapters(sub);
+              setActiveTab('chapters');
+            }}
+          />
+        )}
+
+        {/* TAB 5: STUDY SESSIONS & HABITS (PRIORITY 2) */}
         {activeTab === 'sessions' && activeProfile && (
           <StudySessionsAndHabits
             profile={activeProfile}
@@ -884,7 +1404,7 @@ export default function App() {
           />
         )}
 
-        {/* TAB 4: SLEEP TRACKER (PRIORITY 4) */}
+        {/* TAB 6: SLEEP TRACKER (PRIORITY 4) */}
         {activeTab === 'sleep' && activeProfile && (
           <SleepTracker
             profile={activeProfile}
@@ -893,7 +1413,7 @@ export default function App() {
           />
         )}
 
-        {/* TAB 5: WEEKLY TRENDS DASHBOARD (PRIORITY 5) */}
+        {/* TAB 7: WEEKLY TRENDS DASHBOARD (PRIORITY 5) */}
         {activeTab === 'insights' && activeProfile && (
           <WeeklyTrendsDashboard
             profile={activeProfile}
@@ -904,12 +1424,12 @@ export default function App() {
           />
         )}
 
-        {/* TAB 6: RESOURCES & NOTES */}
+        {/* TAB 8: RESOURCES & NOTES */}
         {activeTab === 'resources' && activeProfile && (
           <ResourcesView profile={activeProfile} />
         )}
 
-        {/* TAB 7: SETTINGS & DATESHEET */}
+        {/* TAB 9: SETTINGS & DATESHEET */}
         {activeTab === 'settings' && activeProfile && (
           <SettingsView
             profile={activeProfile}
@@ -921,6 +1441,28 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Auto Daily Plan Generator Modal */}
+      {activeProfile && (
+        <DailyPlanModal
+          profile={activeProfile}
+          isOpen={showDailyPlanModal}
+          onClose={() => setShowDailyPlanModal(false)}
+          onSavePlan={handleSaveDailyPlan}
+          onSyncToCalendar={handleSyncPlanToCalendar}
+          onEnergyChange={handleSaveEnergyCheckin}
+        />
+      )}
+
+      {/* Daily Energy Check-in Modal */}
+      {activeProfile && (
+        <EnergyCheckinModal
+          isOpen={showEnergyModal}
+          currentEnergy={activeProfile.energyLevel}
+          onSelectEnergy={handleSaveEnergyCheckin}
+          onClose={() => setShowEnergyModal(false)}
+        />
+      )}
 
       {/* Bottom Navigation Bar */}
       <BottomNav activeTab={activeTab} onTabChange={tab => setActiveTab(tab)} />

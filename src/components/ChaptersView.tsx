@@ -1,7 +1,23 @@
 import React, { useState } from 'react';
-import { UserProfile, SubjectName } from '../types';
+import { UserProfile, SubjectName, ChapterDifficulty } from '../types';
 import { SUBJECTS, DEFAULT_STAGES, SYLLABUS_DATA } from '../data/cbseData';
-import { ChevronDown, ChevronRight, Check, Plus, Scissors, RotateCcw, Edit2, Search, Sparkles, CheckCircle2 } from 'lucide-react';
+import { calculateChapterPriorityScore, getChapterMistakesCount } from '../utils/prioritizer';
+import {
+  ChevronDown,
+  ChevronRight,
+  Check,
+  Plus,
+  Scissors,
+  RotateCcw,
+  Edit2,
+  Search,
+  Sparkles,
+  CheckCircle2,
+  AlertTriangle,
+  Flame,
+  ArrowUpDown,
+  Tag
+} from 'lucide-react';
 
 interface ChaptersViewProps {
   profile: UserProfile;
@@ -13,6 +29,8 @@ interface ChaptersViewProps {
   onRenameChapter: (subject: SubjectName, chapterId: string, newName: string) => void;
   onAddChapter: (subject: SubjectName, chapterName: string) => void;
   onRestoreCBSE: (subject: SubjectName) => void;
+  onToggleDifficulty?: (subject: SubjectName, chapterId: string, diff: ChapterDifficulty) => void;
+  onNavigateToMistakes?: (subject: SubjectName, chapterName: string) => void;
 }
 
 export const ChaptersView: React.FC<ChaptersViewProps> = ({
@@ -24,10 +42,13 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
   onCutChapter,
   onRenameChapter,
   onAddChapter,
-  onRestoreCBSE
+  onRestoreCBSE,
+  onToggleDifficulty,
+  onNavigateToMistakes
 }) => {
   const [activeSubject, setActiveSubject] = useState<SubjectName>(initialSubject);
-  const [filter, setFilter] = useState<'all' | 'incomplete' | 'completed'>('all');
+  const [filter, setFilter] = useState<'all' | 'incomplete' | 'completed' | 'mistakes'>('all');
+  const [sortBy, setSortBy] = useState<'default' | 'priority' | 'difficulty' | 'incomplete'>('default');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedChapterIds, setExpandedChapterIds] = useState<Record<string, boolean>>({});
 
@@ -66,21 +87,59 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
     setShowAddModal(false);
   };
 
+  const handleCycleDifficulty = (e: React.MouseEvent, chapterId: string, currentDiff: ChapterDifficulty = 'Medium') => {
+    e.stopPropagation();
+    const cycleMap: Record<ChapterDifficulty, ChapterDifficulty> = {
+      Easy: 'Medium',
+      Medium: 'Hard',
+      Hard: 'Easy'
+    };
+    const nextDiff = cycleMap[currentDiff];
+    onToggleDifficulty?.(activeSubject, chapterId, nextDiff);
+  };
+
   // Filtered chapters
-  const filteredChapters = subjectChapters.filter(ch => {
+  let filteredChapters = subjectChapters.filter(ch => {
     // Search query
     if (searchQuery.trim() && !ch.name.toLowerCase().includes(searchQuery.toLowerCase())) {
       return false;
     }
     const doneCount = ch.stageStates.slice(0, stagesList.length).filter(s => s === 2).length;
+    const mistakesCount = getChapterMistakesCount(profile, activeSubject, ch.name);
+
     if (filter === 'incomplete') {
       return doneCount < stagesList.length;
     }
     if (filter === 'completed') {
       return doneCount === stagesList.length && stagesList.length > 0;
     }
+    if (filter === 'mistakes') {
+      return mistakesCount > 0;
+    }
     return true;
   });
+
+  // Sorting
+  if (sortBy === 'priority') {
+    filteredChapters = [...filteredChapters].sort((a, b) => {
+      const scoreA = calculateChapterPriorityScore(a, activeSubject, profile).score;
+      const scoreB = calculateChapterPriorityScore(b, activeSubject, profile).score;
+      return scoreB - scoreA;
+    });
+  } else if (sortBy === 'difficulty') {
+    const diffWeight: Record<ChapterDifficulty, number> = { Hard: 3, Medium: 2, Easy: 1 };
+    filteredChapters = [...filteredChapters].sort((a, b) => {
+      const wA = diffWeight[a.difficulty || 'Medium'];
+      const wB = diffWeight[b.difficulty || 'Medium'];
+      return wB - wA;
+    });
+  } else if (sortBy === 'incomplete') {
+    filteredChapters = [...filteredChapters].sort((a, b) => {
+      const doneA = a.stageStates.slice(0, stagesList.length).filter(s => s === 2).length;
+      const doneB = b.stageStates.slice(0, stagesList.length).filter(s => s === 2).length;
+      return doneA - doneB;
+    });
+  }
 
   return (
     <div className="space-y-5">
@@ -95,7 +154,7 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
             {activeSubject} Chapters
           </h2>
           <p className="text-xs text-[#8b949e] sm:text-sm">
-            Manage preparation stages from video lectures to NCERT, HOTS & CBSE sample papers.
+            Tag chapter difficulties, inspect mistake logs, and track AI priority rankings.
           </p>
         </div>
 
@@ -146,10 +205,10 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
         })}
       </div>
 
-      {/* Filters & Search Row */}
+      {/* Filters & Sort Row */}
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-        <div className="flex gap-2">
-          {(['all', 'incomplete', 'completed'] as const).map(f => (
+        <div className="flex flex-wrap items-center gap-2">
+          {(['all', 'incomplete', 'completed', 'mistakes'] as const).map(f => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -159,9 +218,28 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                   : 'border-white/10 bg-[#161b22] text-[#8b949e] hover:border-white/20 hover:text-[#f0f6fc]'
               }`}
             >
-              {f === 'all' ? 'All Chapters' : f}
+              {f === 'all'
+                ? 'All Chapters'
+                : f === 'mistakes'
+                ? '⚠️ With Mistakes'
+                : f}
             </button>
           ))}
+
+          {/* Sort Selector */}
+          <div className="flex items-center gap-1.5 ml-1">
+            <ArrowUpDown className="h-3 w-3 text-[#8b949e]" />
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as any)}
+              className="rounded-xl border border-white/10 bg-[#161b22] px-2.5 py-1.5 text-xs font-semibold text-[#f0f6fc]"
+            >
+              <option value="default">Default CBSE Order</option>
+              <option value="priority">🔥 High Priority First</option>
+              <option value="difficulty">Hardest Chapters First</option>
+              <option value="incomplete">Least Completed First</option>
+            </select>
+          </div>
         </div>
 
         {/* Search */}
@@ -207,6 +285,14 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
           filteredChapters.map(ch => {
             const isExpanded = !!expandedChapterIds[ch.id];
             const doneCount = ch.stageStates.slice(0, stagesList.length).filter(s => s === 2).length;
+            const diff: ChapterDifficulty = ch.difficulty || 'Medium';
+            const mistakesCount = getChapterMistakesCount(profile, activeSubject, ch.name);
+            const { score, urgencyTag } = calculateChapterPriorityScore(ch, activeSubject, profile);
+
+            // Difficulty styling
+            let diffColor = 'border-amber-500/40 bg-amber-500/10 text-amber-300';
+            if (diff === 'Hard') diffColor = 'border-rose-500/50 bg-rose-500/15 text-rose-300';
+            if (diff === 'Easy') diffColor = 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300';
 
             return (
               <div
@@ -222,17 +308,59 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                   onClick={() => toggleAccordion(ch.id)}
                   className="flex cursor-pointer items-center justify-between gap-3 p-4 select-none"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <span
-                      className={`text-[#8b949e] transition-transform duration-200 ${
+                      className={`text-[#8b949e] transition-transform duration-200 shrink-0 ${
                         isExpanded ? 'rotate-90 text-[#58a6ff]' : ''
                       }`}
                     >
                       <ChevronRight className="h-4 w-4" />
                     </span>
+
                     <span className="text-sm font-bold text-[#f0f6fc] truncate sm:text-base">
                       {ch.name}
                     </span>
+
+                    {/* Interactive Difficulty Tag */}
+                    <button
+                      type="button"
+                      onClick={e => handleCycleDifficulty(e, ch.id, diff)}
+                      className={`rounded-lg border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider transition-transform hover:scale-105 ${diffColor}`}
+                      title="Click to toggle difficulty (Easy / Medium / Hard)"
+                    >
+                      {diff}
+                    </button>
+
+                    {/* Mistake Journal Badge */}
+                    {mistakesCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onNavigateToMistakes?.(activeSubject, ch.name);
+                        }}
+                        className="flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300 hover:bg-amber-500/30"
+                        title="View errors logged for this chapter in Mistake Journal"
+                      >
+                        <AlertTriangle className="h-3 w-3" />
+                        <span>{mistakesCount} Mistake{mistakesCount > 1 ? 's' : ''}</span>
+                      </button>
+                    )}
+
+                    {/* Smart Priority Score Pill */}
+                    {score >= 60 && (
+                      <span
+                        className={`hidden sm:inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-black ${
+                          score >= 80
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}
+                        title={urgencyTag}
+                      >
+                        <Flame className="h-2.5 w-2.5 fill-current" />
+                        Priority {score}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0">
@@ -259,8 +387,13 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                 {/* Chapter Body (Stages + Actions) */}
                 {isExpanded && (
                   <div className="border-t border-white/10 bg-[#0b0f19]/60 p-4 sm:p-5">
-                    <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-[#8b949e]">
-                      {stagesList.length} Preparation Stages • Click any chip to cycle state (Pending → In Progress → Done)
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-[11px] font-bold text-[#8b949e]">
+                      <span>
+                        {stagesList.length} Preparation Stages • Click chip to cycle (Pending → In Progress → Done)
+                      </span>
+                      <span className="text-[#58a6ff]">
+                        Smart Priority Ranking Score: {score}/100 ({urgencyTag})
+                      </span>
                     </div>
 
                     {/* Stage Chips Grid */}
@@ -322,6 +455,13 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                       </div>
 
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => onNavigateToMistakes?.(activeSubject, ch.name)}
+                          className="flex items-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/20"
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Log Mistake
+                        </button>
                         <button
                           onClick={() => handleOpenRename(ch.id, ch.name)}
                           className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs font-semibold text-[#8b949e] hover:border-[#58a6ff]/50 hover:text-[#58a6ff]"

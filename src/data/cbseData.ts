@@ -1,4 +1,4 @@
-import { ClassLevel, SubjectName, SubjectHabit, DailySleepLog, StudySession, UserProfile } from '../types';
+import { ClassLevel, SubjectName, SubjectHabit, DailySleepLog, StudySession, UserProfile, MistakeEntry, CalendarBlock } from '../types';
 
 export const SUBJECTS: SubjectName[] = [
   'Mathematics',
@@ -391,6 +391,54 @@ export function generateSampleInitialProfile(): UserProfile {
   const sessions: StudySession[] = [];
   const sleepLogs: Record<string, DailySleepLog> = {};
 
+  const sampleMistakes: MistakeEntry[] = [
+    {
+      id: 'mst_1',
+      date: todayStr,
+      subject: 'Mathematics',
+      chapterName: 'Quadratic Equations',
+      description: 'Sign error inside discriminant b² - 4ac when c is negative.',
+      solution: 'Remember double negative becomes positive: b² - 4(a)(-c) = b² + 4ac.',
+      reason: 'Careless Error',
+      resolved: false,
+      tags: ['Formula', 'Board Exam']
+    },
+    {
+      id: 'mst_2',
+      date: todayStr,
+      subject: 'Physics',
+      chapterName: 'Light - Reflection and Refraction',
+      description: 'Mixed up magnification formula sign for mirror vs lens.',
+      solution: 'Spherical mirror m = -v/u, Spherical lens m = +v/u.',
+      reason: 'Formula / Derivation',
+      resolved: false,
+      tags: ['Sign Convention', 'Ray Optics']
+    }
+  ];
+
+  const sampleCalendarBlocks: CalendarBlock[] = [
+    {
+      id: 'blk_demo_1',
+      date: todayStr,
+      startTime: '10:00',
+      endTime: '11:30',
+      subject: 'Mathematics',
+      chapterName: 'Quadratic Equations',
+      title: 'NCERT Exemplar & Discriminant Problems',
+      isCompleted: false
+    },
+    {
+      id: 'blk_demo_2',
+      date: todayStr,
+      startTime: '14:00',
+      endTime: '15:30',
+      subject: 'Physics',
+      chapterName: 'Light - Reflection and Refraction',
+      title: 'Ray diagrams & Lens formula numericals',
+      isCompleted: false
+    }
+  ];
+
   return {
     id: 'prof_' + Date.now(),
     name: 'Aarav',
@@ -400,9 +448,14 @@ export function generateSampleInitialProfile(): UserProfile {
     sessions,
     habits,
     sleepLogs,
-    streak: 0,
+    streak: 6,
     lastActiveDate: todayStr,
     createdAt: new Date().toISOString(),
-    targetExamName: 'CBSE Class 10 Board Exam'
+    targetExamName: 'CBSE Class 10 Board Exam',
+    examMode: 'Standard',
+    energyLevel: 'High',
+    mistakes: sampleMistakes,
+    calendarBlocks: sampleCalendarBlocks,
+    dailyPlans: {}
   };
 }

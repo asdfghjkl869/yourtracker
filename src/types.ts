@@ -9,10 +9,14 @@ export type SubjectName =
   | 'English'
   | 'Hindi';
 
+export type ChapterDifficulty = 'Easy' | 'Medium' | 'Hard';
+
 export interface Chapter {
   id: string;
   name: string;
   stageStates: number[]; // 0: Pending, 1: In Progress, 2: Done
+  difficulty?: ChapterDifficulty;
+  weightage?: number; // Marks in board exam
 }
 
 export interface SubjectData {
@@ -46,6 +50,76 @@ export interface DailySleepLog {
   notes?: string;
 }
 
+export type EnergyLevel = 'Low' | 'Medium' | 'High';
+
+export type ExamMode = 'Standard' | 'Exam Mode' | 'Panic Mode' | 'Mid-terms' | 'Pre-boards' | 'Final Boards';
+
+export type MistakeReason =
+  | 'Conceptual Gap'
+  | 'Careless Error'
+  | 'Formula / Derivation'
+  | 'Calculation Mistake'
+  | 'Time Pressure'
+  | 'Misread Question'
+  | 'Memory Gap';
+
+export interface MistakeEntry {
+  id: string;
+  date?: string; // YYYY-MM-DD
+  loggedDate?: string;
+  subject: SubjectName;
+  chapterName: string;
+  chapterId?: string;
+  description?: string;
+  mistakeText?: string;
+  solution?: string;
+  correctConcept?: string;
+  reason: MistakeReason;
+  tags?: string[];
+  resolved?: boolean;
+  isResolved?: boolean;
+  resolvedDate?: string;
+}
+
+export interface DailyTask {
+  id: string;
+  subject: SubjectName;
+  chapterName: string;
+  chapterId?: string;
+  title?: string;
+  taskTitle?: string;
+  stageName?: string;
+  estimatedMinutes: number;
+  completed?: boolean;
+  isCompleted?: boolean;
+  priorityScore?: number;
+  reason?: string;
+  reasonTag?: string; // e.g. "Weak Chapter", "High Weightage", "Hard Difficulty", "Nearest Exam"
+  scheduledTime?: string; // e.g. "09:00"
+}
+
+export interface DailyPlan {
+  date: string; // YYYY-MM-DD
+  energyLevel: EnergyLevel;
+  tasks: DailyTask[];
+  generatedAt: string;
+  targetTotalMinutes: number;
+  targetHours?: number;
+}
+
+export interface CalendarBlock {
+  id: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // "HH:MM"
+  endTime: string; // "HH:MM"
+  subject: SubjectName;
+  chapterName?: string;
+  title: string;
+  notes?: string;
+  isCompleted?: boolean;
+  taskId?: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -59,6 +133,26 @@ export interface UserProfile {
   lastActiveDate: string;
   createdAt: string;
   targetExamName?: string;
+
+  // New features state
+  examMode?: ExamMode;
+  energyLevel?: EnergyLevel;
+  lastEnergyCheckinDate?: string;
+  energyLevels?: Record<string, EnergyLevel>; // YYYY-MM-DD -> Energy
+  mistakes?: MistakeEntry[];
+  dailyPlans?: Record<string, DailyPlan>; // YYYY-MM-DD -> DailyPlan
+  calendarBlocks?: CalendarBlock[];
+  panicModeManual?: boolean;
 }
 
-export type TabType = 'home' | 'chapters' | 'sessions' | 'sleep' | 'insights' | 'resources' | 'settings';
+export type TabType =
+  | 'home'
+  | 'planner'
+  | 'chapters'
+  | 'mistakes'
+  | 'sessions'
+  | 'sleep'
+  | 'insights'
+  | 'resources'
+  | 'settings';
+

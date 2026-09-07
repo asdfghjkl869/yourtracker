@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile, TabType } from '../types';
-import { Sun, Moon, ChevronDown, Plus, Check, Clock, CloudSun } from 'lucide-react';
+import { UserProfile, TabType, ExamMode, EnergyLevel } from '../types';
+import {
+  Sun,
+  Moon,
+  ChevronDown,
+  Plus,
+  Check,
+  Clock,
+  CloudSun,
+  Flame,
+  Battery,
+  BatteryCharging,
+  ShieldAlert,
+  Sparkles
+} from 'lucide-react';
 
 interface HeaderProps {
   activeProfile: UserProfile | null;
@@ -10,6 +23,8 @@ interface HeaderProps {
   isDark: boolean;
   onToggleTheme: () => void;
   onTabChange: (tab: TabType) => void;
+  onOpenEnergyModal?: () => void;
+  onExamModeChange?: (mode: ExamMode) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,10 +34,18 @@ export const Header: React.FC<HeaderProps> = ({
   onAddNewProfile,
   isDark,
   onToggleTheme,
-  onTabChange
+  onTabChange,
+  onOpenEnergyModal,
+  onExamModeChange
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [examModeDropdownOpen, setExamModeDropdownOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const currentEnergy: EnergyLevel =
+    (activeProfile?.energyLevels && activeProfile.energyLevels[todayStr]) || 'Medium';
+  const currentExamMode: ExamMode = activeProfile?.examMode || 'Final Boards';
 
   useEffect(() => {
     const updateTime = () => {
@@ -67,19 +90,69 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Time & Weather Pill */}
-          <div className="hidden items-center gap-3 rounded-full border border-white/10 bg-[#161b22] px-3 py-1 text-xs font-semibold text-[#8b949e] md:flex">
-            <span className="flex items-center gap-1 text-[#f0f6fc]">
-              <Clock className="h-3.5 w-3.5 text-[#58a6ff]" />
-              {currentTime}
-            </span>
-            <span className="h-3 w-px bg-white/10" />
-            <span className="flex items-center gap-1 text-[#8b949e]">
-              <CloudSun className="h-3.5 w-3.5 text-[#d29922]" />
-              26°C
-            </span>
+        {/* Center / Right actions */}
+        <div className="flex items-center gap-2 sm:gap-2.5">
+          {/* Daily Energy Level Badge */}
+          <button
+            onClick={onOpenEnergyModal}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-all ${
+              currentEnergy === 'High'
+                ? 'border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+                : currentEnergy === 'Low'
+                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+                : 'border-sky-500/40 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
+            }`}
+            title="Click to update Daily Energy Level"
+          >
+            {currentEnergy === 'High' && <Flame className="h-3.5 w-3.5 fill-current text-amber-400" />}
+            {currentEnergy === 'Low' && <Battery className="h-3.5 w-3.5 text-emerald-400" />}
+            {currentEnergy === 'Medium' && <BatteryCharging className="h-3.5 w-3.5 text-sky-400" />}
+            <span className="hidden sm:inline">{currentEnergy} Energy</span>
+          </button>
+
+          {/* Exam Mode Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setExamModeDropdownOpen(!examModeDropdownOpen)}
+              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#161b22] px-2.5 py-1 text-xs font-bold text-[#f0f6fc] hover:border-white/20 sm:px-3"
+              title="Change Exam Mode"
+            >
+              <span className="h-2 w-2 rounded-full bg-[#58a6ff]" />
+              <span className="hidden sm:inline">{currentExamMode}</span>
+              <span className="sm:hidden">{currentExamMode.split(' ')[0]}</span>
+              <ChevronDown className="h-3 w-3 text-[#8b949e]" />
+            </button>
+
+            {examModeDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setExamModeDropdownOpen(false)}
+                />
+                <div className="absolute right-0 z-50 mt-2 w-48 rounded-2xl border border-white/10 bg-[#161b22] p-1.5 shadow-2xl ring-1 ring-white/10">
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#8b949e]">
+                    Exam Mode
+                  </div>
+                  {(['Mid-terms', 'Pre-boards', 'Final Boards'] as ExamMode[]).map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => {
+                        onExamModeChange?.(mode);
+                        setExamModeDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition-all ${
+                        currentExamMode === mode
+                          ? 'bg-[#58a6ff]/15 text-[#58a6ff]'
+                          : 'text-[#8b949e] hover:bg-white/[0.04] hover:text-[#f0f6fc]'
+                      }`}
+                    >
+                      <span>{mode}</span>
+                      {currentExamMode === mode && <Check className="h-3.5 w-3.5 text-[#58a6ff]" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Profile Dropdown */}
@@ -92,8 +165,8 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-tr from-[#58a6ff] to-blue-600 text-[11px] font-bold text-white shadow-inner">
                 {activeProfile ? getInitials(activeProfile.name) : 'A'}
               </div>
-              <span className="max-w-[100px] truncate sm:max-w-[140px]">
-                {activeProfile ? `${activeProfile.name} - ${activeProfile.classLevel}` : 'Select Profile'}
+              <span className="max-w-[80px] truncate sm:max-w-[120px]">
+                {activeProfile ? activeProfile.name : 'Profile'}
               </span>
               <ChevronDown className="h-3.5 w-3.5 text-[#8b949e]" />
             </button>
@@ -156,19 +229,13 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="theme-toggle-button"
             onClick={onToggleTheme}
-            className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#161b22] px-2.5 py-1.5 text-xs font-semibold text-[#8b949e] transition-all hover:border-[#58a6ff]/40 hover:text-[#58a6ff] sm:px-3 sm:text-xs"
+            className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#161b22] px-2.5 py-1.5 text-xs font-semibold text-[#8b949e] transition-all hover:border-[#58a6ff]/40 hover:text-[#58a6ff]"
             title="Toggle theme"
           >
             {isDark ? (
-              <>
-                <Sun className="h-3.5 w-3.5 text-[#d29922]" />
-                <span className="hidden sm:inline">Light</span>
-              </>
+              <Sun className="h-3.5 w-3.5 text-[#d29922]" />
             ) : (
-              <>
-                <Moon className="h-3.5 w-3.5 text-[#58a6ff]" />
-                <span className="hidden sm:inline">Dark</span>
-              </>
+              <Moon className="h-3.5 w-3.5 text-[#58a6ff]" />
             )}
           </button>
         </div>
