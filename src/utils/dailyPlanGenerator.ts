@@ -8,151 +8,384 @@ import {
   StageFocusCategory,
   Chapter
 } from '../types';
-import { getRankedChapters, RankedChapterItem } from './prioritizer';
 import { DEFAULT_STAGES, SUBJECTS } from '../data/cbseData';
 import { getDaysRemaining } from './helpers';
 
-interface SubjectUrgencyInfo {
+/**
+ * Parses raw chapter strings (e.g. "Ch 3: Pair of Linear Equations in Two Variables")
+ * into clean, standard labels (e.g. "Chapter 3") and the topic name.
+ */
+export function parseChapterLabelAndTitle(fullName: string): {
+  chapterLabel: string;
+  cleanName: string;
+  chapterNumber: number;
+} {
+  if (!fullName) {
+    return { chapterLabel: 'Chapter 1', cleanName: 'General Practice', chapterNumber: 1 };
+  }
+
+  const trimmed = fullName.trim();
+  const match = trimmed.match(/^(?:Ch(?:apter)?\.?\s*(\d+)|(\d+)\.)[\s:]*(.*)$/i);
+
+  if (match) {
+    const num = parseInt(match[1] || match[2], 10);
+    const rest = (match[3] || '').trim();
+    return {
+      chapterLabel: `Chapter ${num}`,
+      cleanName: rest || `Chapter ${num}`,
+      chapterNumber: num
+    };
+  }
+
+  return {
+    chapterLabel: trimmed,
+    cleanName: trimmed,
+    chapterNumber: 0
+  };
+}
+
+export interface SubjectUrgencyScore {
   subject: SubjectName;
   daysLeft: number;
   completionPercent: number;
+  remainingPercent: number;
   unresolvedMistakes: number;
-  hardChaptersCount: number;
-  subjectScore: number;
-  candidates: RankedChapterItem[];
-}
-
-export interface TargetStageResult {
-  stageName: string;
-  stageIndex: number;
-  isMatch: boolean;
-  stageState: number; // 0: Pending, 1: In Progress, 2: Done
+  incompleteHardChapters: number;
+  totalScore: number;
 }
 
 /**
- * Finds the most relevant stage for a given chapter based on stage focus or custom selected stages.
+ * Evaluates subject priority based on CBSE exam dates, remaining syllabus,
+ * difficulty tags, and logged student mistakes.
  */
-export function findTargetStageForChapter(
+export function calculateSubjectUrgency(profile: UserProfile): SubjectUrgencyScore[] {
+  const scores: SubjectUrgencyScore[] = [];
+
+  for (const sub of SUBJECTS) {
+    const subData = profile.subjects[sub];
+    if (!subData) continue;
+
+    const stagesList = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
+    const totalChapters = (subData.chapters || []).length;
+    const stagesPerChapter = stagesList.length || 4;
+    const totalPossibleStages = totalChapters * stagesPerChapter;
+
+    let completedStages = 0;
+    let inProgressStages = 0;
+    let incompleteHardChapters = 0;
+
+    for (const ch of subData.chapters || []) {
+      const states = ch.stageStates || [];
+      const chDone = states.filter(s => s === 2).length;
+      const chInProg = states.filter(s => s === 1).length;
+
+      completedStages += chDone;
+      inProgressStages += chInProg;
+
+      if (ch.difficulty === 'Hard' && chDone < stagesPerChapter) {
+        incompleteHardChapters++;
+      }
+    }
+
+    const completionPercent =
+      totalPossibleStages > 0
+        ? Math.min(100, Math.round(((completedStages + inProgressStages * 0.5) / totalPossibleStages) * 100))
+        : 0;
+    const remainingPercent = 100 - completionPercent;
+
+    const daysLeft = getDaysRemaining(subData.examDate);
+
+    // Unresolved mistakes logged for this subject
+    const unresolvedMistakes = (profile.mistakes || []).filter(
+      m => m.subject === sub && !m.resolved && !m.isResolved
+    ).length;
+
+    // --- Scoring Formula ---
+    let totalScore = 10; // Base score
+
+    // 1. Days until exam (closer exam = higher priority)
+    if (daysLeft >= 0) {
+      if (daysLeft <= 3) totalScore += 60; // Imminent exam (this week)
+      else if (daysLeft <= 7) totalScore += 45;
+      else if (daysLeft <= 14) totalScore += 30; // Next 2 weeks
+      else if (daysLeft <= 30) totalScore += 18;
+      else if (daysLeft <= 60) totalScore += 10;
+      else totalScore += 5;
+    } else {
+      // Exam has already passed
+      totalScore -= 20;
+    }
+
+    // 2. Remaining syllabus percentage (more syllabus remaining = higher priority)
+    totalScore += Math.round((remainingPercent / 100) * 35);
+
+    // 3. Unresolved logged mistakes (student weaknesses need direct attention)
+    totalScore += Math.min(25, unresolvedMistakes * 6);
+
+    // 4. Incomplete hard chapters
+    totalScore += Math.min(20, incompleteHardChapters * 4);
+
+    scores.push({
+      subject: sub,
+      daysLeft,
+      completionPercent,
+      remainingPercent,
+      unresolvedMistakes,
+      incompleteHardChapters,
+      totalScore
+    });
+  }
+
+  // Sort descending: subjects that urgently need work come first
+  scores.sort((a, b) => b.totalScore - a.totalScore);
+  return scores;
+}
+
+/**
+ * Determines clean work type string for a chapter and stage.
+ * Examples: "NCERT + Examples", "Revision", "Practice Questions", "Concepts & Notes", "PYQs & Question Bank"
+ */
+export function determineWorkType(
+  chapter: Chapter,
+  subject: SubjectName,
+  profile: UserProfile,
+  energyLevel: EnergyLevel,
+  hasMistakes: boolean,
+  targetStageName?: string
+): string {
+  // If chapter has active logged mistakes, prioritize resolving them
+  if (hasMistakes) {
+    return 'Mistakes Review';
+  }
+
+  // If user has Low Energy, favor revision or lightweight review
+  if (energyLevel === 'Low') {
+    return 'Revision';
+  }
+
+  const stage = (targetStageName || '').toLowerCase();
+
+  if (stage.includes('ncert') || stage.includes('line by line') || stage.includes('solution') || stage.includes('prashnottar')) {
+    return 'NCERT + Examples';
+  }
+  if (stage.includes('pyq') || stage.includes('sample') || stage.includes('board') || stage.includes('previous')) {
+    return 'PYQs & Question Bank';
+  }
+  if (stage.includes('exemplar') || stage.includes('hots') || stage.includes('module') || stage.includes('numerical') || stage.includes('agarwal') || stage.includes('chand')) {
+    return 'Practice Questions';
+  }
+  if (stage.includes('lecture') || stage.includes('shot') || stage.includes('theory') || stage.includes('concept') || stage.includes('reading') || stage.includes('saransh')) {
+    return 'Concepts & Notes';
+  }
+  if (stage.includes('formula') || stage.includes('derivation')) {
+    return 'Formula Sheet';
+  }
+  if (stage.includes('diagram')) {
+    return 'Diagrams & Terms';
+  }
+  if (stage.includes('map')) {
+    return 'Map Work & Dates';
+  }
+
+  // Fallback based on chapter completion
+  const states = chapter.stageStates || [];
+  const doneCount = states.filter(s => s === 2).length;
+  if (doneCount >= states.length && states.length > 0) {
+    return 'Revision';
+  }
+  if (doneCount === 0) {
+    return subject === 'Mathematics' || subject === 'Physics' || subject === 'Chemistry'
+      ? 'NCERT + Examples'
+      : 'Concepts & Notes';
+  }
+
+  return 'Practice Questions';
+}
+
+/**
+ * Finds the exact target stage for a chapter based on stage states and preset filters.
+ */
+export function getChapterStageDetails(
   chapter: Chapter,
   subject: SubjectName,
   profile: UserProfile,
   stageFocus: StageFocusCategory = 'all',
   selectedCustomStages: string[] = []
-): TargetStageResult {
+): { stageName: string; stageIndex: number; isCompleted: boolean } {
   const stages = profile.customStages[subject] || DEFAULT_STAGES[subject] || [];
   if (stages.length === 0) {
-    return { stageName: 'NCERT Practice', stageIndex: 0, isMatch: true, stageState: 0 };
+    return { stageName: 'NCERT Practice', stageIndex: 0, isCompleted: false };
   }
 
   const states = chapter.stageStates || [];
 
-  const matchesKeyword = (name: string, keywords: string[]) => {
-    const lower = name.toLowerCase();
-    return keywords.some(k => lower.includes(k));
-  };
-
   // 1. Custom selected stages
   if (stageFocus === 'custom' && selectedCustomStages.length > 0) {
-    const matchedIndices: number[] = [];
-    stages.forEach((st, idx) => {
-      if (selectedCustomStages.includes(st)) {
-        matchedIndices.push(idx);
-      }
-    });
+    const matched = stages
+      .map((st, idx) => ({ name: st, idx }))
+      .filter(item => selectedCustomStages.includes(item.name));
 
-    if (matchedIndices.length > 0) {
-      // Prioritize In Progress (1)
-      const inProg = matchedIndices.find(idx => states[idx] === 1);
-      if (inProg !== undefined) {
-        return { stageName: stages[inProg], stageIndex: inProg, isMatch: true, stageState: 1 };
-      }
-      // Then Pending (0)
-      const pending = matchedIndices.find(idx => states[idx] === 0);
-      if (pending !== undefined) {
-        return { stageName: stages[pending], stageIndex: pending, isMatch: true, stageState: 0 };
-      }
-      // If all chosen stages are done (2), schedule first chosen for revision
-      const firstChosen = matchedIndices[0];
-      return {
-        stageName: stages[firstChosen],
-        stageIndex: firstChosen,
-        isMatch: true,
-        stageState: states[firstChosen] ?? 2
-      };
+    if (matched.length > 0) {
+      // In-progress first
+      const inProg = matched.find(m => states[m.idx] === 1);
+      if (inProg) return { stageName: inProg.name, stageIndex: inProg.idx, isCompleted: false };
+      // Pending first
+      const pending = matched.find(m => states[m.idx] === 0);
+      if (pending) return { stageName: pending.name, stageIndex: pending.idx, isCompleted: false };
+      // Fallback
+      return { stageName: matched[0].name, stageIndex: matched[0].idx, isCompleted: true };
     }
   }
 
-  // 2. In-Progress only
-  if (stageFocus === 'in_progress') {
-    for (let i = 0; i < stages.length; i++) {
-      if (states[i] === 1) {
-        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 1 };
-      }
-    }
-  }
-
-  // 3. Theory / Concepts (Lectures, One Shot, Theory, Notes, Reading)
-  if (stageFocus === 'theory') {
-    for (let i = 0; i < stages.length; i++) {
-      if (matchesKeyword(stages[i], ['lecture', 'shot', 'theory', 'reading', 'saransh', 'formula', 'notes', 'concept'])) {
-        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
-      }
-    }
-    return { stageName: stages[0], stageIndex: 0, isMatch: true, stageState: states[0] ?? 0 };
-  }
-
-  // 4. NCERT / Standard Questions
-  if (stageFocus === 'ncert') {
-    for (let i = 0; i < stages.length; i++) {
-      if (matchesKeyword(stages[i], ['ncert', 'line by line', 'solutions', 'prashnottar', 'back questions'])) {
-        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
-      }
-    }
-    const idx = Math.min(1, stages.length - 1);
-    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
-  }
-
-  // 5. Advanced / Modules / Exemplar / HOTS
-  if (stageFocus === 'advanced') {
-    for (let i = 0; i < stages.length; i++) {
-      if (matchesKeyword(stages[i], ['module', 'exemplar', 'hots', 'agarwal', 'chand', 'numericals', 'map work', 'shabdarth'])) {
-        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
-      }
-    }
-    const idx = Math.min(2, stages.length - 1);
-    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
-  }
-
-  // 6. PYQ / Mock / Practice / Revision
-  if (stageFocus === 'practice') {
-    for (let i = stages.length - 1; i >= 0; i--) {
-      if (matchesKeyword(stages[i], ['pyq', 'sample', 'paper', 'practice', 'test', 'patra', 'previous'])) {
-        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
-      }
-    }
-    const idx = stages.length - 1;
-    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
-  }
-
-  // 7. Default ('all'): First finish what's In Progress (1)
+  // 2. In-Progress stages first (finish what has been started)
   for (let i = 0; i < stages.length; i++) {
     if (states[i] === 1) {
-      return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 1 };
+      return { stageName: stages[i], stageIndex: i, isCompleted: false };
     }
   }
 
-  // Then earliest pending stage (0)
+  // 3. Earliest pending stage
   for (let i = 0; i < stages.length; i++) {
     if (states[i] === 0) {
-      return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 0 };
+      return { stageName: stages[i], stageIndex: i, isCompleted: false };
     }
   }
 
-  // If all completed (2), return the last stage (PYQ/Practice) for revision
+  // 4. If all done, pick last stage for revision
   const lastIdx = stages.length - 1;
-  return { stageName: stages[lastIdx], stageIndex: lastIdx, isMatch: false, stageState: 2 };
+  return { stageName: stages[lastIdx], stageIndex: lastIdx, isCompleted: true };
 }
 
+/**
+ * Scores and ranks chapters within a specific subject.
+ */
+function rankChaptersForSubject(
+  subject: SubjectName,
+  profile: UserProfile,
+  energyLevel: EnergyLevel
+): Array<{
+  chapter: Chapter;
+  chapterIndex: number;
+  hasMistakes: boolean;
+  mistakesCount: number;
+  score: number;
+  reasonTag: string;
+}> {
+  const subData = profile.subjects[subject];
+  if (!subData || !subData.chapters) return [];
+
+  const chapters = subData.chapters;
+  const stages = profile.customStages[subject] || DEFAULT_STAGES[subject] || [];
+  const totalStages = stages.length || 4;
+
+  const results = chapters.map((ch, idx) => {
+    const states = ch.stageStates || [];
+    const doneCount = states.filter(s => s === 2).length;
+    const inProgCount = states.filter(s => s === 1).length;
+    const isAllDone = totalStages > 0 && doneCount >= totalStages;
+    const diff = ch.difficulty || 'Medium';
+
+    const mistakes = (profile.mistakes || []).filter(
+      m => m.subject === subject && m.chapterName.trim().toLowerCase() === ch.name.trim().toLowerCase() && !m.resolved && !m.isResolved
+    );
+    const mistakesCount = mistakes.length;
+    const hasMistakes = mistakesCount > 0;
+
+    let score = 20;
+    let reasonTag = 'Regular Syllabus';
+
+    // 1. Unresolved Mistakes (Direct student weakness)
+    if (hasMistakes) {
+      score += 40;
+      reasonTag = `Mistakes Logged (${mistakesCount})`;
+    }
+
+    // 2. In-Progress Continuity (Do not abandon half-finished chapters)
+    if (inProgCount > 0) {
+      score += 30;
+      if (!hasMistakes) reasonTag = 'In-Progress Chapter';
+    }
+
+    // 3. Difficulty weighting adapted to Energy Level
+    if (energyLevel === 'High') {
+      if (diff === 'Hard') {
+        score += 28;
+        if (!hasMistakes && inProgCount === 0) reasonTag = 'Hard Topic • Deep Focus';
+      } else if (diff === 'Medium') {
+        score += 14;
+      } else {
+        score += 6;
+      }
+    } else if (energyLevel === 'Medium') {
+      if (diff === 'Medium') {
+        score += 20;
+      } else if (diff === 'Hard') {
+        score += 18;
+      } else {
+        score += 10;
+      }
+    } else {
+      // Low Energy: favor revision, easy/medium chapters, or chapters needing light brush-up
+      if (diff === 'Easy') {
+        score += 24;
+        reasonTag = 'Light Focus';
+      } else if (diff === 'Medium') {
+        score += 18;
+      } else {
+        score += 4; // avoid heavy hard chapters on low energy
+      }
+      if (isAllDone) {
+        score += 15; // revision friendly
+      }
+    }
+
+    // 4. Completion Status
+    if (isAllDone) {
+      // Deprioritize fully finished chapters unless energy is Low or no unfinished chapters exist
+      score -= energyLevel === 'Low' ? 10 : 35;
+    } else if (doneCount === 0 && inProgCount === 0) {
+      // Unstarted chapter: slight bonus
+      score += 12;
+      if (!hasMistakes && inProgCount === 0 && diff !== 'Hard') {
+        reasonTag = 'Pending Chapter';
+      }
+    }
+
+    // 5. Logical syllabus sequence: earlier chapters should generally be completed first
+    const sequenceBonus = Math.max(0, 15 - idx);
+    score += sequenceBonus;
+
+    return {
+      chapter: ch,
+      chapterIndex: idx,
+      hasMistakes,
+      mistakesCount,
+      score,
+      reasonTag
+    };
+  });
+
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
+/**
+ * Standard non-overlapping daily time slots designed for mental stamina and clean breaks.
+ */
+const TIME_SLOTS = [
+  { start: '09:00', end: '09:45' },
+  { start: '11:00', end: '11:45' },
+  { start: '14:00', end: '14:45' },
+  { start: '16:30', end: '17:15' },
+  { start: '19:00', end: '19:45' },
+  { start: '20:45', end: '21:30' }
+];
+
+/**
+ * Rebuilt Auto Daily Plan Generator from scratch.
+ * Generates 4-6 high-quality tasks per day with proper subject prioritization,
+ * clean task naming ("Subject • Chapter • Type"), and energy level adaptation.
+ */
 export function generateDailyPlan(
   profile: UserProfile,
   energyLevel: EnergyLevel = 'Medium',
@@ -163,282 +396,172 @@ export function generateDailyPlan(
 ): DailyPlan {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 1. Target task count & duration based on energy
+  // 1. Determine strict task count and default duration based on Energy Level
+  // High = 6 tasks, Medium = 5 tasks, Low = 4 tasks (strictly within 4-6 range)
   let targetCount = 5;
-  let defaultDuration = 40;
+  let defaultMinutes = 45;
 
-  if (energyLevel === 'Low') {
-    targetCount = 3;
-    defaultDuration = 25;
-  } else if (energyLevel === 'High') {
+  if (energyLevel === 'High') {
     targetCount = 6;
-    defaultDuration = 50;
+    defaultMinutes = 50;
+  } else if (energyLevel === 'Low') {
+    targetCount = 4;
+    defaultMinutes = 35;
   }
 
-  // 2. Compute urgency & gather ranked chapters per subject
-  const allRanked = getRankedChapters(profile);
-  const subjectsUrgency: SubjectUrgencyInfo[] = [];
+  // 2. Rank subjects by urgency
+  const subjectRankings = calculateSubjectUrgency(profile);
 
-  for (const sub of SUBJECTS) {
-    const subData = profile.subjects[sub];
-    if (!subData) continue;
-
-    const stagesList = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
-    const totalPossibleStages = (subData.chapters || []).length * (stagesList.length || 4);
-    let doneStagesCount = 0;
-    let hardCount = 0;
-
-    for (const ch of subData.chapters || []) {
-      const doneForCh = (ch.stageStates || []).filter(s => s === 2).length;
-      doneStagesCount += doneForCh;
-      if (ch.difficulty === 'Hard' && doneForCh < (stagesList.length || 4)) {
-        hardCount++;
-      }
-    }
-
-    const completionPercent = totalPossibleStages > 0
-      ? Math.round((doneStagesCount / totalPossibleStages) * 100)
-      : 0;
-
-    const daysLeft = getDaysRemaining(subData.examDate);
-
-    // Unresolved mistakes in this subject
-    const unresolvedMistakes = (profile.mistakes || []).filter(
-      m => m.subject === sub && !m.resolved && !m.isResolved
-    ).length;
-
-    // Chapters for this subject sorted by priority
-    let subChapters = allRanked.filter(item => item.subject === sub);
-
-    // If stage focus is active, re-rank chapters that have matching pending stages
-    if (stageFocus !== 'all') {
-      subChapters = [...subChapters].sort((a, b) => {
-        const aTarget = findTargetStageForChapter(a.chapter, sub, profile, stageFocus, selectedCustomStages);
-        const bTarget = findTargetStageForChapter(b.chapter, sub, profile, stageFocus, selectedCustomStages);
-        const aScore = (aTarget.isMatch && aTarget.stageState !== 2 ? 60 : 0) + (a.mistakesCount > 0 ? 20 : 0) + a.priorityScore;
-        const bScore = (bTarget.isMatch && bTarget.stageState !== 2 ? 60 : 0) + (b.mistakesCount > 0 ? 20 : 0) + b.priorityScore;
-        return bScore - aScore;
-      });
-    } else if (energyLevel === 'Low') {
-      // If Low energy: prioritize review, formulas, mistakes, or medium difficulty chapters
-      subChapters = [...subChapters].sort((a, b) => {
-        const aScore = (a.mistakesCount > 0 ? 35 : 0) + (a.percentDone > 40 ? 25 : 0);
-        const bScore = (b.mistakesCount > 0 ? 35 : 0) + (b.percentDone > 40 ? 25 : 0);
-        return bScore - aScore;
-      });
-    }
-
-    // Calculate subject-level urgency score
-    let subjectScore = 15;
-
-    // Exam proximity factor
-    if (daysLeft >= 0) {
-      if (daysLeft <= 2) subjectScore += 55;
-      else if (daysLeft <= 7) subjectScore += 38;
-      else if (daysLeft <= 14) subjectScore += 24;
-      else if (daysLeft <= 30) subjectScore += 12;
-      else subjectScore += 4;
-    }
-
-    // Lagging syllabus factor
-    subjectScore += Math.round((100 - completionPercent) * 0.35);
-
-    // Mistakes bonus
-    subjectScore += Math.min(25, unresolvedMistakes * 6);
-
-    // Hard chapters factor
-    subjectScore += Math.min(15, hardCount * 3);
-
-    subjectsUrgency.push({
-      subject: sub,
-      daysLeft,
-      completionPercent,
-      unresolvedMistakes,
-      hardChaptersCount: hardCount,
-      subjectScore,
-      candidates: subChapters
-    });
-  }
-
-  // Sort subjects by urgency score descending
-  subjectsUrgency.sort((a, b) => b.subjectScore - a.subjectScore);
-
-  // 3. Determine subject limits according to diversity mode
-  const selectedTasks: DailyTask[] = [];
-  const subjectTaskCounts = new Map<SubjectName, number>();
-
-  let maxTasksPerSubject = 2;
-  if (diversityMode === 'balanced') {
-    if (targetCount <= 3) {
-      maxTasksPerSubject = 1;
-    } else if (targetCount <= 5) {
-      maxTasksPerSubject = 2;
-    } else {
-      maxTasksPerSubject = 2;
-    }
-  } else if (diversityMode === 'dual') {
-    maxTasksPerSubject = Math.ceil(targetCount / 2);
-  } else if (diversityMode === 'focus') {
-    maxTasksPerSubject = targetCount;
-  }
-
-  // Determine eligible subjects list based on diversityMode
-  let eligibleSubjects = [...subjectsUrgency];
+  // Filter or prioritize based on diversityMode
+  let activeSubjects: SubjectUrgencyScore[] = subjectRankings;
   if (diversityMode === 'focus' && focusSubject) {
-    const matched = subjectsUrgency.filter(s => s.subject === focusSubject);
-    if (matched.length > 0) {
-      eligibleSubjects = matched;
-    }
+    const matched = subjectRankings.filter(s => s.subject === focusSubject);
+    if (matched.length > 0) activeSubjects = matched;
   } else if (diversityMode === 'dual') {
-    eligibleSubjects = subjectsUrgency.slice(0, 2);
+    activeSubjects = subjectRankings.slice(0, 2);
   }
 
-  // Scheduled time slots across a balanced day
-  const timeSlots = ['09:00', '11:15', '14:30', '16:45', '19:00', '20:30', '21:45'];
+  // 3. Select chapters across subjects in a balanced, intelligent manner
+  const selectedTasks: DailyTask[] = [];
+  const subjectCounts = new Map<SubjectName, number>();
+  const pickedChapterIds = new Set<string>();
 
-  // 4. Interleaved Round-Robin Selection
-  let loopSafety = 0;
-  while (selectedTasks.length < targetCount && loopSafety < 50) {
-    loopSafety++;
-    let addedInThisPass = 0;
+  // Determine maximum tasks per subject to prevent one subject from dominating
+  let maxPerSubject = 2;
+  if (diversityMode === 'focus') {
+    maxPerSubject = targetCount;
+  } else if (diversityMode === 'dual') {
+    maxPerSubject = Math.ceil(targetCount / 2);
+  } else {
+    // Balanced mode: spread across top 3-4 subjects
+    maxPerSubject = targetCount <= 4 ? 2 : 2;
+  }
 
-    for (const subInfo of eligibleSubjects) {
+  let pass = 0;
+  while (selectedTasks.length < targetCount && pass < 4) {
+    pass++;
+    let addedInPass = 0;
+
+    for (const subInfo of activeSubjects) {
       if (selectedTasks.length >= targetCount) break;
 
-      const currentCount = subjectTaskCounts.get(subInfo.subject) || 0;
+      const currentSubjectCount = subjectCounts.get(subInfo.subject) || 0;
+      if (currentSubjectCount >= maxPerSubject) continue;
 
-      if (diversityMode === 'balanced' && currentCount >= maxTasksPerSubject) {
-        continue;
-      }
-      if (diversityMode === 'dual' && currentCount >= maxTasksPerSubject) {
-        continue;
-      }
+      const rankedChapters = rankChaptersForSubject(subInfo.subject, profile, energyLevel);
 
-      const alreadyPickedChapterIds = new Set(
-        selectedTasks.filter(t => t.subject === subInfo.subject).map(t => t.chapterId)
-      );
+      // Find best candidate chapter not yet picked today
+      const candidate = rankedChapters.find(c => !pickedChapterIds.has(c.chapter.id));
 
-      // 1st Preference: chapters matching the chosen stage focus and not yet completed
-      let nextCandidate = subInfo.candidates.find(c => {
-        if (alreadyPickedChapterIds.has(c.chapter.id)) return false;
-        if (stageFocus !== 'all') {
-          const target = findTargetStageForChapter(c.chapter, subInfo.subject, profile, stageFocus, selectedCustomStages);
-          return target.isMatch && target.stageState !== 2;
-        }
-        return c.percentDone < 100;
-      });
+      if (candidate) {
+        pickedChapterIds.add(candidate.chapter.id);
+        subjectCounts.set(subInfo.subject, currentSubjectCount + 1);
 
-      // 2nd Preference: any unpicked incomplete chapter
-      if (!nextCandidate) {
-        nextCandidate = subInfo.candidates.find(
-          c => !alreadyPickedChapterIds.has(c.chapter.id) && c.percentDone < 100
-        );
-      }
-
-      // 3rd Preference: unpicked chapter even if 100% (for active recall / practice)
-      if (!nextCandidate) {
-        nextCandidate = subInfo.candidates.find(
-          c => !alreadyPickedChapterIds.has(c.chapter.id)
-        );
-      }
-
-      if (nextCandidate) {
-        const item = nextCandidate;
-        const targetStage = findTargetStageForChapter(
-          item.chapter,
-          item.subject,
+        const stageDetails = getChapterStageDetails(
+          candidate.chapter,
+          subInfo.subject,
           profile,
           stageFocus,
           selectedCustomStages
         );
 
-        const pendingStageName = targetStage.stageName;
-        const targetStageIndex = targetStage.stageIndex;
+        const workType = determineWorkType(
+          candidate.chapter,
+          subInfo.subject,
+          profile,
+          energyLevel,
+          candidate.hasMistakes,
+          stageDetails.stageName
+        );
 
-        let taskTitle = `${pendingStageName} — ${item.chapter.name}`;
-        let reasonTag = item.reasons[0] || item.urgencyTag;
+        const { chapterLabel, cleanName } = parseChapterLabelAndTitle(candidate.chapter.name);
 
-        if (targetStage.stageState === 1) {
-          taskTitle = `Resume: ${pendingStageName} (${item.chapter.name})`;
-          reasonTag = '⏳ In Progress Stage';
-        } else if (item.mistakesCount > 0) {
-          taskTitle = `${pendingStageName} & Mistakes Review (${item.chapter.name})`;
-          reasonTag = `⚠️ Weak Chapter (${item.mistakesCount} Mistakes)`;
-        } else if (item.difficulty === 'Hard') {
-          taskTitle = `Deep Work: ${pendingStageName} (${item.chapter.name})`;
-          reasonTag = '🔥 Hard Difficulty';
-        } else if (item.percentDone === 0) {
-          taskTitle = `Start: ${pendingStageName} for ${item.chapter.name}`;
-          reasonTag = '⚡ 0% Syllabus Coverage';
-        } else if (item.percentDone === 100 || targetStage.stageState === 2) {
-          taskTitle = `Active Recall: ${pendingStageName} (${item.chapter.name})`;
-          reasonTag = '🔄 Retention & Sample Practice';
+        // --- CLEAN TASK NAMING ---
+        // Format: "Subject • Chapter X • Type of Work"
+        // e.g. "Mathematics • Chapter 3 • NCERT + Examples"
+        // e.g. "Physics • Chapter 1 • Revision"
+        // e.g. "Chemistry • Chapter 5 • Practice Questions"
+        const cleanTitle = `${subInfo.subject} • ${chapterLabel} • ${workType}`;
+
+        // Duration calculation
+        let duration = defaultMinutes;
+        if (candidate.chapter.difficulty === 'Hard' && energyLevel === 'High') {
+          duration = 55;
+        } else if (workType === 'Revision' || energyLevel === 'Low') {
+          duration = 30;
         }
 
-        // Duration estimation
-        let duration = defaultDuration;
-        if (item.difficulty === 'Hard') duration += energyLevel === 'High' ? 15 : 5;
-        if (energyLevel === 'Low') duration = Math.min(30, duration);
+        const slotIndex = selectedTasks.length % TIME_SLOTS.length;
+        const slot = TIME_SLOTS[slotIndex];
 
-        const slotIndex = selectedTasks.length % timeSlots.length;
-        const scheduledTime = timeSlots[slotIndex];
+        // Format a helpful, professional reason tag
+        let reasonTag = candidate.reasonTag;
+        if (subInfo.daysLeft >= 0 && subInfo.daysLeft <= 14) {
+          reasonTag = `Exam in ${subInfo.daysLeft}d • ${subInfo.remainingPercent}% Left`;
+        } else if (candidate.hasMistakes) {
+          reasonTag = `Weak Area • ${candidate.mistakesCount} Mistakes`;
+        }
 
         selectedTasks.push({
-          id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-          subject: item.subject,
-          chapterName: item.chapter.name,
-          chapterId: item.chapter.id,
-          title: taskTitle,
-          taskTitle,
-          stageName: pendingStageName,
-          stageIndex: targetStageIndex,
+          id: `task_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          subject: subInfo.subject,
+          chapterName: candidate.chapter.name,
+          chapterId: candidate.chapter.id,
+          title: cleanTitle,
+          taskTitle: cleanTitle,
+          stageName: stageDetails.stageName,
+          stageIndex: stageDetails.stageIndex,
+          workType,
           estimatedMinutes: duration,
           completed: false,
           isCompleted: false,
-          priorityScore: item.priorityScore,
+          priorityScore: candidate.score,
           reason: reasonTag,
           reasonTag,
-          scheduledTime
+          scheduledTime: slot.start
         });
 
-        subjectTaskCounts.set(subInfo.subject, currentCount + 1);
-        addedInThisPass++;
+        addedInPass++;
       }
     }
 
-    if (addedInThisPass === 0) {
-      maxTasksPerSubject++;
+    if (addedInPass === 0) {
+      // If we couldn't add any more tasks under the current limit, relax maxPerSubject
+      maxPerSubject++;
     }
   }
 
-  // 5. Fallback safety if no tasks could be formed
-  if (selectedTasks.length === 0) {
-    const fallbackSubjects: SubjectName[] = ['Mathematics', 'Physics', 'Chemistry', 'Social Science', 'English'];
-    for (let i = 0; i < Math.min(targetCount, fallbackSubjects.length); i++) {
-      const sub = fallbackSubjects[i];
-      const stages = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
-      const fallbackStage = stages[Math.min(1, stages.length - 1)] || 'Sample Papers';
+  // 4. Fallback if profile had empty chapters
+  if (selectedTasks.length < 4) {
+    const fallbackSubjects: SubjectName[] = ['Mathematics', 'Physics', 'Chemistry', 'Biology'];
+    while (selectedTasks.length < 4) {
+      const idx = selectedTasks.length;
+      const sub = fallbackSubjects[idx % fallbackSubjects.length];
+      const slot = TIME_SLOTS[idx % TIME_SLOTS.length];
+      const cleanTitle = `${sub} • Chapter 1 • NCERT + Examples`;
+
       selectedTasks.push({
-        id: 'task_' + Date.now() + '_' + i,
+        id: `task_fb_${Date.now()}_${idx}`,
         subject: sub,
-        chapterName: 'Full Syllabus Board Revision',
-        chapterId: 'fallback_' + i,
-        title: `${fallbackStage} — CBSE Practice for ${sub}`,
-        taskTitle: `${fallbackStage} — CBSE Practice for ${sub}`,
-        stageName: fallbackStage,
+        chapterName: 'Chapter 1: Foundational Practice',
+        chapterId: `ch_fb_${idx}`,
+        title: cleanTitle,
+        taskTitle: cleanTitle,
+        stageName: 'NCERT Practice',
         stageIndex: 0,
-        estimatedMinutes: defaultDuration,
+        workType: 'NCERT + Examples',
+        estimatedMinutes: defaultMinutes,
         completed: false,
         isCompleted: false,
         priorityScore: 70,
-        reason: 'Board Exam Preparation',
-        reasonTag: 'Full Syllabus Mock',
-        scheduledTime: timeSlots[i] || '10:00'
+        reason: 'CBSE Exam Preparation',
+        reasonTag: 'Core Syllabus',
+        scheduledTime: slot.start
       });
     }
   }
 
-  const totalMins = selectedTasks.reduce((acc, t) => acc + t.estimatedMinutes, 0);
+  const totalMinutes = selectedTasks.reduce((acc, t) => acc + t.estimatedMinutes, 0);
 
   return {
     date: todayStr,
@@ -449,7 +572,7 @@ export function generateDailyPlan(
     selectedStages: selectedCustomStages,
     tasks: selectedTasks,
     generatedAt: new Date().toISOString(),
-    targetTotalMinutes: totalMins,
-    targetHours: Number((totalMins / 60).toFixed(1))
+    targetTotalMinutes: totalMinutes,
+    targetHours: Number((totalMinutes / 60).toFixed(1))
   };
 }

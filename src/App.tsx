@@ -34,6 +34,7 @@ import { PanicModeBanner } from './components/PanicModeBanner';
 import { SyllabusPredictorCard } from './components/SyllabusPredictorCard';
 import { DailyStudyChart } from './components/DailyStudyChart';
 import { getDaysRemaining, getLocalDateString } from './utils/helpers';
+import { generateDailyPlan } from './utils/dailyPlanGenerator';
 import {
   Sparkles,
   Play,
@@ -737,27 +738,46 @@ export default function App() {
   };
 
   // --- Handlers for Daily Plan Generator & Daily Quest ---
+  const STANDARD_STUDY_SLOTS = [
+    { start: '09:00', end: '09:45' },
+    { start: '11:00', end: '11:45' },
+    { start: '14:00', end: '14:45' },
+    { start: '16:30', end: '17:15' },
+    { start: '19:00', end: '19:45' },
+    { start: '20:45', end: '21:30' }
+  ];
+
   const handleSaveDailyPlan = (plan: DailyPlan) => {
     if (!activeProfile) return;
     const dateStr = plan.date;
     const existingBlocks = activeProfile.calendarBlocks || [];
 
-    const occupiedHours = new Set(
-      existingBlocks
-        .filter(b => b.date === dateStr)
-        .map(b => parseInt(b.startTime.split(':')[0], 10))
+    // Filter out previous uncompleted auto-planned study blocks for this date,
+    // while preserving:
+    // 1. Blocks on other dates
+    // 2. Already completed blocks on this date
+    // 3. User-created manual blocks on this date
+    const preservedBlocks = existingBlocks.filter(b => {
+      if (b.date !== dateStr) return true;
+      if (b.isCompleted) return true;
+      const isAutoTaskBlock = !!b.taskId || b.id.startsWith('blk_task_');
+      return !isAutoTaskBlock;
+    });
+
+    const updatedBlocks = [...preservedBlocks];
+    const occupiedTimes = new Set(
+      updatedBlocks.filter(b => b.date === dateStr).map(b => b.startTime)
     );
 
-    const candidateHours = [9, 11, 13, 15, 17, 19, 20, 10, 14, 16, 18, 21];
-    let candidateIdx = 0;
-    const updatedBlocks = [...existingBlocks];
-
+    let slotIdx = 0;
     plan.tasks.forEach(t => {
       const taskDone = !!(t.isCompleted ?? t.completed);
-      const existingIdx = updatedBlocks.findIndex(
+      // Check if there is an already preserved completed block for this task
+      const existingDoneBlock = preservedBlocks.find(
         b =>
           b.date === dateStr &&
-          (b.id === t.id ||
+          b.isCompleted &&
+          (b.taskId === t.id ||
             b.id === `blk_${t.id}` ||
             (b.subject === t.subject &&
               ((t.chapterId && b.chapterId === t.chapterId) ||
@@ -765,42 +785,52 @@ export default function App() {
                 b.title === (t.title || t.taskTitle))))
       );
 
-      if (existingIdx >= 0) {
-        updatedBlocks[existingIdx] = {
-          ...updatedBlocks[existingIdx],
-          isCompleted: taskDone,
-          title: t.title || t.taskTitle || updatedBlocks[existingIdx].title
-        };
-      } else {
-        while (candidateIdx < candidateHours.length && occupiedHours.has(candidateHours[candidateIdx])) {
-          candidateIdx++;
-        }
-        const hour = candidateIdx < candidateHours.length ? candidateHours[candidateIdx] : 9 + ((candidateIdx * 2) % 12);
-        candidateIdx++;
-        occupiedHours.add(hour);
-
-        const durationMins = t.estimatedMinutes || 45;
-        const sh = String(hour).padStart(2, '0');
-        const totalEndMins = hour * 60 + durationMins;
-        const endH = Math.floor(totalEndMins / 60);
-        const endM = totalEndMins % 60;
-        const eh = String(endH).padStart(2, '0');
-        const em = String(endM).padStart(2, '0');
-
-        updatedBlocks.push({
-          id: t.id ? `blk_${t.id}` : 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          date: dateStr,
-          startTime: `${sh}:00`,
-          endTime: `${eh}:${em}`,
-          subject: t.subject,
-          chapterId: t.chapterId,
-          chapterName: t.chapterName,
-          stageName: t.stageName,
-          stageIndex: t.stageIndex,
-          title: t.title || t.taskTitle || 'Study Task',
-          isCompleted: taskDone
-        });
+      if (existingDoneBlock) {
+        return;
       }
+
+      // Find next available clean time slot
+      while (slotIdx < STANDARD_STUDY_SLOTS.length && occupiedTimes.has(STANDARD_STUDY_SLOTS[slotIdx].start)) {
+        slotIdx++;
+      }
+
+      const slot = slotIdx < STANDARD_STUDY_SLOTS.length
+        ? STANDARD_STUDY_SLOTS[slotIdx]
+        : {
+            start: `${Math.min(22, 9 + slotIdx * 2)}:00`,
+            end: `${Math.min(22, 9 + slotIdx * 2)}:45`
+          };
+      slotIdx++;
+      occupiedTimes.add(slot.start);
+
+      const durationMins = t.estimatedMinutes || 45;
+      const [shStr, smStr] = slot.start.split(':');
+      const totalStartMins = parseInt(shStr, 10) * 60 + parseInt(smStr || '0', 10);
+      const totalEndMins = totalStartMins + durationMins;
+      const eh = String(Math.floor(totalEndMins / 60)).padStart(2, '0');
+      const em = String(totalEndMins % 60).padStart(2, '0');
+
+      updatedBlocks.push({
+        id: `blk_${t.id}`,
+        taskId: t.id,
+        date: dateStr,
+        startTime: slot.start,
+        endTime: `${eh}:${em}`,
+        subject: t.subject,
+        chapterId: t.chapterId,
+        chapterName: t.chapterName,
+        stageName: t.stageName,
+        stageIndex: t.stageIndex,
+        workType: t.workType,
+        title: t.title || t.taskTitle || `${t.subject} Practice`,
+        isCompleted: taskDone
+      });
+    });
+
+    // Sort calendar blocks by date and startTime
+    updatedBlocks.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.startTime.localeCompare(b.startTime);
     });
 
     setProfiles(prev =>
@@ -820,6 +850,13 @@ export default function App() {
     );
     setShowDailyPlanModal(false);
     showNotification("Today's study plan saved and auto-synced with Calendar! 🎯📅");
+  };
+
+  const handleQuickGenerateTodayPlan = (energy?: EnergyLevel) => {
+    if (!activeProfile) return;
+    const currentEnergy = energy || activeProfile.energyLevel || 'Medium';
+    const freshPlan = generateDailyPlan(activeProfile, currentEnergy);
+    handleSaveDailyPlan(freshPlan);
   };
 
   const handleToggleDailyTask = (taskId: string) => {
@@ -919,23 +956,33 @@ export default function App() {
     const dateStr = targetDate || getLocalDateString(new Date());
     const existingBlocks = activeProfile.calendarBlocks || [];
 
-    const occupiedHours = new Set(
-      existingBlocks
-        .filter(b => b.date === dateStr)
-        .map(b => parseInt(b.startTime.split(':')[0], 10))
+    // Filter out previous uncompleted auto-planned study blocks for this date,
+    // while preserving:
+    // 1. Blocks on other dates
+    // 2. Already completed blocks on this date
+    // 3. User-created manual blocks on this date
+    const preservedBlocks = existingBlocks.filter(b => {
+      if (b.date !== dateStr) return true;
+      if (b.isCompleted) return true;
+      const isAutoTaskBlock = !!b.taskId || b.id.startsWith('blk_task_');
+      return !isAutoTaskBlock;
+    });
+
+    const updatedBlocks = [...preservedBlocks];
+    const occupiedTimes = new Set(
+      updatedBlocks.filter(b => b.date === dateStr).map(b => b.startTime)
     );
 
-    const candidateHours = [9, 11, 13, 15, 17, 19, 20, 10, 14, 16, 18, 21];
-    let candidateIdx = 0;
-    const updatedBlocks = [...existingBlocks];
+    let slotIdx = 0;
     let addedCount = 0;
 
     tasks.forEach(t => {
       const taskDone = !!(t.isCompleted ?? t.completed);
-      const existingIdx = updatedBlocks.findIndex(
+      const existingDoneBlock = preservedBlocks.find(
         b =>
           b.date === dateStr &&
-          (b.id === t.id ||
+          b.isCompleted &&
+          (b.taskId === t.id ||
             b.id === `blk_${t.id}` ||
             (b.subject === t.subject &&
               ((t.chapterId && b.chapterId === t.chapterId) ||
@@ -943,43 +990,51 @@ export default function App() {
                 b.title === (t.title || t.taskTitle))))
       );
 
-      if (existingIdx >= 0) {
-        updatedBlocks[existingIdx] = {
-          ...updatedBlocks[existingIdx],
-          isCompleted: taskDone,
-          title: t.title || t.taskTitle || updatedBlocks[existingIdx].title
-        };
-      } else {
-        while (candidateIdx < candidateHours.length && occupiedHours.has(candidateHours[candidateIdx])) {
-          candidateIdx++;
-        }
-        const hour = candidateIdx < candidateHours.length ? candidateHours[candidateIdx] : 9 + ((candidateIdx * 2) % 12);
-        candidateIdx++;
-        occupiedHours.add(hour);
-
-        const durationMins = t.estimatedMinutes || 45;
-        const sh = String(hour).padStart(2, '0');
-        const totalEndMins = hour * 60 + durationMins;
-        const endH = Math.floor(totalEndMins / 60);
-        const endM = totalEndMins % 60;
-        const eh = String(endH).padStart(2, '0');
-        const em = String(endM).padStart(2, '0');
-
-        updatedBlocks.push({
-          id: t.id ? `blk_${t.id}` : 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          date: dateStr,
-          startTime: `${sh}:00`,
-          endTime: `${eh}:${em}`,
-          subject: t.subject,
-          chapterId: t.chapterId,
-          chapterName: t.chapterName,
-          stageName: t.stageName,
-          stageIndex: t.stageIndex,
-          title: t.title || t.taskTitle || 'Study Task',
-          isCompleted: taskDone
-        });
-        addedCount++;
+      if (existingDoneBlock) {
+        return;
       }
+
+      while (slotIdx < STANDARD_STUDY_SLOTS.length && occupiedTimes.has(STANDARD_STUDY_SLOTS[slotIdx].start)) {
+        slotIdx++;
+      }
+
+      const slot = slotIdx < STANDARD_STUDY_SLOTS.length
+        ? STANDARD_STUDY_SLOTS[slotIdx]
+        : {
+            start: `${Math.min(22, 9 + slotIdx * 2)}:00`,
+            end: `${Math.min(22, 9 + slotIdx * 2)}:45`
+          };
+      slotIdx++;
+      occupiedTimes.add(slot.start);
+
+      const durationMins = t.estimatedMinutes || 45;
+      const [shStr, smStr] = slot.start.split(':');
+      const totalStartMins = parseInt(shStr, 10) * 60 + parseInt(smStr || '0', 10);
+      const totalEndMins = totalStartMins + durationMins;
+      const eh = String(Math.floor(totalEndMins / 60)).padStart(2, '0');
+      const em = String(totalEndMins % 60).padStart(2, '0');
+
+      updatedBlocks.push({
+        id: `blk_${t.id}`,
+        taskId: t.id,
+        date: dateStr,
+        startTime: slot.start,
+        endTime: `${eh}:${em}`,
+        subject: t.subject,
+        chapterId: t.chapterId,
+        chapterName: t.chapterName,
+        stageName: t.stageName,
+        stageIndex: t.stageIndex,
+        workType: t.workType,
+        title: t.title || t.taskTitle || `${t.subject} Practice`,
+        isCompleted: taskDone
+      });
+      addedCount++;
+    });
+
+    updatedBlocks.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.startTime.localeCompare(b.startTime);
     });
 
     setProfiles(prev =>
@@ -1726,16 +1781,28 @@ export default function App() {
                       <span>📅</span>
                       <span>Day Tracker: Daily Quest</span>
                     </div>
-                    <button
-                      onClick={() => setShowDailyPlanModal(true)}
-                      className="text-xs font-bold text-[#58a6ff] hover:underline"
-                    >
-                      {todayDailyPlan ? 'Edit Plan' : 'Auto Plan'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {todayDailyPlan && (
+                        <button
+                          onClick={() => handleQuickGenerateTodayPlan()}
+                          className="text-xs font-bold text-[#3fb950] hover:underline flex items-center gap-1"
+                          title="Regenerate today's plan with latest progress"
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          <span>Regenerate</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowDailyPlanModal(true)}
+                        className="text-xs font-bold text-[#58a6ff] hover:underline"
+                      >
+                        {todayDailyPlan ? 'Customize' : 'Auto Plan'}
+                      </button>
+                    </div>
                   </div>
                   <p className="mt-1 mb-3 text-xs text-[#8b949e]">
                     {todayDailyPlan
-                      ? `Generated plan for ${todayDailyPlan.energyLevel} energy (${todayDailyPlan.targetHours} hrs)`
+                      ? `Generated plan for ${todayDailyPlan.energyLevel} energy (${todayDailyPlan.tasks.length} tasks • ${todayDailyPlan.targetHours || (todayDailyPlan.targetTotalMinutes / 60).toFixed(1)} hrs)`
                       : 'Priority chapters scheduled based on CBSE datesheet pace.'}
                   </p>
 
@@ -1750,6 +1817,7 @@ export default function App() {
                             b.date === todayStr &&
                             (b.id === task.id ||
                               b.id === `blk_${task.id}` ||
+                              b.taskId === task.id ||
                               (b.subject === task.subject &&
                                 ((task.chapterId && b.chapterId === task.chapterId) ||
                                   (task.chapterName && b.chapterName === task.chapterName) ||
@@ -1784,33 +1852,40 @@ export default function App() {
                                 >
                                   {task.subject}
                                 </span>
+                                {task.workType && (
+                                  <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-semibold text-[#f0f6fc]">
+                                    {task.workType}
+                                  </span>
+                                )}
                                 {isSyncedToCalendar && (
                                   <span
                                     className="inline-flex items-center gap-1 rounded bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-[9px] font-medium text-sky-400"
                                     title="Synchronized in Calendar Planner"
                                   >
                                     <Calendar className="h-2.5 w-2.5" />
-                                    <span>In Calendar</span>
-                                  </span>
-                                )}
-                                {task.stageName && (
-                                  <span className="text-[10px] text-[#8b949e] truncate max-w-[130px]">
-                                    {task.stageName}
+                                    <span>In Planner</span>
                                   </span>
                                 )}
                               </div>
                               <div
-                                className={`text-xs font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
+                                className={`text-xs font-semibold leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
                                   isDone ? 'line-through text-[#8b949e]' : ''
                                 }`}
                                 title={task.title || task.taskTitle}
                               >
                                 {task.title || task.taskTitle}
                               </div>
+                              {task.chapterName && (
+                                <div className="text-[10px] text-[#8b949e] truncate mt-0.5">
+                                  {task.chapterName}
+                                </div>
+                              )}
                               <div className="mt-1 flex items-center gap-2 text-[10px] text-[#8b949e]">
                                 <span>⏱️ {task.estimatedMinutes} mins</span>
                                 <span>•</span>
-                                <span className="truncate">{task.reasonTag || task.reason || 'CBSE Target'}</span>
+                                <span className="truncate text-amber-300/90 font-medium">
+                                  {task.reasonTag || task.reason || 'CBSE Target'}
+                                </span>
                               </div>
                             </div>
                             <span
@@ -1832,6 +1907,7 @@ export default function App() {
                               b.date === todayStr &&
                               (b.id === t.id ||
                                 b.id === `blk_${t.id}` ||
+                                b.taskId === t.id ||
                                 (b.subject === t.subject &&
                                   ((t.chapterId && b.chapterId === t.chapterId) ||
                                     (t.chapterName && b.chapterName === t.chapterName) ||
@@ -1853,8 +1929,8 @@ export default function App() {
                               {allSynced ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Calendar className="h-3.5 w-3.5" />}
                               <span>
                                 {allSynced
-                                  ? `Synced with Calendar (${syncedCount}/${todayDailyPlan.tasks.length})`
-                                  : `Sync Plan to Calendar (${todayDailyPlan.tasks.length - syncedCount} pending)`}
+                                  ? `Synced with Planner (${syncedCount}/${todayDailyPlan.tasks.length})`
+                                  : `Sync Plan to Planner (${todayDailyPlan.tasks.length - syncedCount} pending)`}
                               </span>
                             </button>
                             {allSynced && (
@@ -1910,11 +1986,11 @@ export default function App() {
                       ))}
 
                       <button
-                        onClick={() => setShowDailyPlanModal(true)}
-                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#58a6ff] to-[#388bfd] py-2 text-xs font-bold text-[#0b0f19] hover:brightness-110"
+                        onClick={() => handleQuickGenerateTodayPlan()}
+                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#58a6ff] to-[#388bfd] py-2.5 text-xs font-bold text-[#0b0f19] hover:brightness-110 active:scale-95 transition-all shadow-md shadow-sky-500/20"
                       >
                         <Sparkles className="h-3.5 w-3.5" />
-                        Generate Today's Plan (4-7 Tasks)
+                        <span>Generate Today's Plan (4-6 Tasks)</span>
                       </button>
                     </div>
                   )}

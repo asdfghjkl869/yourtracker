@@ -103,6 +103,7 @@ export interface DailyTask {
   taskTitle?: string;
   stageName?: string;
   stageIndex?: number;
+  workType?: string;
   estimatedMinutes: number;
   completed?: boolean;
   isCompleted?: boolean;
@@ -135,10 +136,11 @@ export interface CalendarBlock {
   chapterId?: string;
   stageName?: string;
   stageIndex?: number;
+  workType?: string;
+  taskId?: string;
   title: string;
   notes?: string;
   isCompleted?: boolean;
-  taskId?: string;
 }
 
 export interface UserProfile {
