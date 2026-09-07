@@ -337,6 +337,12 @@ export default function App() {
   // --- Handlers for Chapter Stages & Cutting with Undo ---
   const handleCycleStage = (subject: SubjectName, chapterId: string, stageIdx: number) => {
     if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
+    const stages = activeProfile.customStages[subject] || DEFAULT_STAGES[subject] || [];
+    const stageTitle = stages[stageIdx] || '';
+    let newStageState = 0;
+    let targetChapterName = '';
+
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
@@ -344,30 +350,78 @@ export default function App() {
           if (!subData) return p;
           const updatedChapters = subData.chapters.map(ch => {
             if (ch.id === chapterId) {
+              targetChapterName = ch.name;
               const current = ch.stageStates[stageIdx] || 0;
               const next = (current + 1) % 3;
+              newStageState = next;
               const newStates = [...ch.stageStates];
               newStates[stageIdx] = next;
               return { ...ch, stageStates: newStates };
             }
             return ch;
           });
+
+          // Sync with Today's daily plan
+          const plan = p.dailyPlans?.[today];
+          let updatedPlans = p.dailyPlans;
+          if (plan) {
+            const isDone = newStageState === 2;
+            const updatedTasks = plan.tasks.map(t => {
+              const matches =
+                t.subject === subject &&
+                (t.chapterId === chapterId || t.chapterName === targetChapterName) &&
+                (t.stageIndex === stageIdx || t.stageName === stageTitle);
+              if (matches) {
+                return { ...t, isCompleted: isDone, completed: isDone };
+              }
+              return t;
+            });
+            updatedPlans = {
+              ...(p.dailyPlans || {}),
+              [today]: {
+                ...plan,
+                tasks: updatedTasks
+              }
+            };
+          }
+
+          // Sync with calendar blocks
+          const updatedBlocks = (p.calendarBlocks || []).map(b => {
+            const matches =
+              b.subject === subject &&
+              (b.chapterId === chapterId || b.chapterName === targetChapterName) &&
+              (b.stageIndex === stageIdx || b.stageName === stageTitle);
+            if (matches) {
+              return { ...b, isCompleted: newStageState === 2 };
+            }
+            return b;
+          });
+
           return {
             ...p,
             subjects: {
               ...p.subjects,
               [subject]: { ...subData, chapters: updatedChapters }
-            }
+            },
+            dailyPlans: updatedPlans,
+            calendarBlocks: updatedBlocks
           };
         }
         return p;
       })
     );
+
+    if (newStageState === 2) {
+      showNotification(`"${stageTitle}" completed! Synced to planner +20 XP 🌟`);
+    }
   };
 
   const handleMarkAllDone = (subject: SubjectName, chapterId: string) => {
     if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
     const stages = activeProfile.customStages[subject] || DEFAULT_STAGES[subject];
+    let chName = '';
+
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
@@ -375,24 +429,53 @@ export default function App() {
           if (!subData) return p;
           const updated = subData.chapters.map(ch => {
             if (ch.id === chapterId) {
+              chName = ch.name;
               return { ...ch, stageStates: stages.map(() => 2) };
             }
             return ch;
           });
+
+          const plan = p.dailyPlans?.[today];
+          let updatedPlans = p.dailyPlans;
+          if (plan) {
+            const updatedTasks = plan.tasks.map(t => {
+              if (t.subject === subject && (t.chapterId === chapterId || t.chapterName === chName)) {
+                return { ...t, isCompleted: true, completed: true };
+              }
+              return t;
+            });
+            updatedPlans = {
+              ...(p.dailyPlans || {}),
+              [today]: { ...plan, tasks: updatedTasks }
+            };
+          }
+
+          const updatedBlocks = (p.calendarBlocks || []).map(b => {
+            if (b.subject === subject && (b.chapterId === chapterId || b.chapterName === chName)) {
+              return { ...b, isCompleted: true };
+            }
+            return b;
+          });
+
           return {
             ...p,
-            subjects: { ...p.subjects, [subject]: { ...subData, chapters: updated } }
+            subjects: { ...p.subjects, [subject]: { ...subData, chapters: updated } },
+            dailyPlans: updatedPlans,
+            calendarBlocks: updatedBlocks
           };
         }
         return p;
       })
     );
-    showNotification(`All stages marked complete! 🚀`);
+    showNotification(`All stages marked complete & synced to planner! 🚀`);
   };
 
   const handleResetStages = (subject: SubjectName, chapterId: string) => {
     if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
     const stages = activeProfile.customStages[subject] || DEFAULT_STAGES[subject];
+    let chName = '';
+
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
@@ -400,19 +483,45 @@ export default function App() {
           if (!subData) return p;
           const updated = subData.chapters.map(ch => {
             if (ch.id === chapterId) {
+              chName = ch.name;
               return { ...ch, stageStates: stages.map(() => 0) };
             }
             return ch;
           });
+
+          const plan = p.dailyPlans?.[today];
+          let updatedPlans = p.dailyPlans;
+          if (plan) {
+            const updatedTasks = plan.tasks.map(t => {
+              if (t.subject === subject && (t.chapterId === chapterId || t.chapterName === chName)) {
+                return { ...t, isCompleted: false, completed: false };
+              }
+              return t;
+            });
+            updatedPlans = {
+              ...(p.dailyPlans || {}),
+              [today]: { ...plan, tasks: updatedTasks }
+            };
+          }
+
+          const updatedBlocks = (p.calendarBlocks || []).map(b => {
+            if (b.subject === subject && (b.chapterId === chapterId || b.chapterName === chName)) {
+              return { ...b, isCompleted: false };
+            }
+            return b;
+          });
+
           return {
             ...p,
-            subjects: { ...p.subjects, [subject]: { ...subData, chapters: updated } }
+            subjects: { ...p.subjects, [subject]: { ...subData, chapters: updated } },
+            dailyPlans: updatedPlans,
+            calendarBlocks: updatedBlocks
           };
         }
         return p;
       })
     );
-    showNotification('Stages reset to pending.');
+    showNotification('Stages reset to pending & planner synced.');
   };
 
   const handleCutChapter = (subject: SubjectName, chapterId: string) => {
@@ -734,7 +843,10 @@ export default function App() {
         startTime: `${sh}:00`,
         endTime: `${eh}:30`,
         subject: t.subject,
+        chapterId: t.chapterId,
         chapterName: t.chapterName,
+        stageName: t.stageName,
+        stageIndex: t.stageIndex,
         title: t.title || t.taskTitle || 'Study Task',
         isCompleted: t.isCompleted ?? t.completed ?? false
       };
@@ -752,6 +864,160 @@ export default function App() {
       })
     );
     showNotification(`Synced ${newBlocks.length} blocks to Calendar Planner! 📅`);
+  };
+
+  const handleAddStageToTodayPlan = (
+    subject: SubjectName,
+    chapterId: string,
+    chapterName: string,
+    stageName: string,
+    stageIdx: number,
+    durationMinutes = 45
+  ) => {
+    if (!activeProfile) return;
+    const today = new Date().toISOString().split('T')[0];
+    const existingPlan = activeProfile.dailyPlans?.[today];
+    const existingTasks = existingPlan?.tasks || [];
+
+    const isAlreadyAdded = existingTasks.some(
+      t =>
+        t.subject === subject &&
+        (t.chapterId === chapterId || t.chapterName === chapterName) &&
+        (t.stageIndex === stageIdx || t.stageName === stageName)
+    );
+
+    if (isAlreadyAdded) {
+      showNotification(`"${stageName} — ${chapterName}" is already in Today's Plan! 🎯`);
+      return;
+    }
+
+    const newTask: DailyTask = {
+      id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      subject,
+      chapterId,
+      chapterName,
+      stageName,
+      stageIndex: stageIdx,
+      title: `${stageName} — ${chapterName}`,
+      taskTitle: `${stageName} — ${chapterName}`,
+      estimatedMinutes: durationMinutes,
+      completed: false,
+      isCompleted: false,
+      reasonTag: 'Added from Syllabus',
+      reason: `Direct syllabus focus on ${stageName}`,
+      scheduledTime: '16:00'
+    };
+
+    const updatedTasks = [...existingTasks, newTask];
+    const totalMins = updatedTasks.reduce((acc, t) => acc + t.estimatedMinutes, 0);
+
+    const updatedPlan: DailyPlan = {
+      date: today,
+      energyLevel: existingPlan?.energyLevel || 'Medium',
+      diversityMode: existingPlan?.diversityMode || 'balanced',
+      focusSubject: existingPlan?.focusSubject,
+      stageFocus: existingPlan?.stageFocus || 'all',
+      tasks: updatedTasks,
+      generatedAt: existingPlan?.generatedAt || new Date().toISOString(),
+      targetTotalMinutes: totalMins,
+      targetHours: Number((totalMins / 60).toFixed(1))
+    };
+
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          const subData = p.subjects[subject];
+          let updatedChapters = subData?.chapters;
+          if (subData?.chapters) {
+            updatedChapters = subData.chapters.map(ch => {
+              if (ch.id === chapterId || ch.name === chapterName) {
+                const newStates = [...(ch.stageStates || [])];
+                if ((newStates[stageIdx] || 0) === 0) {
+                  newStates[stageIdx] = 1;
+                }
+                return { ...ch, stageStates: newStates };
+              }
+              return ch;
+            });
+          }
+
+          return {
+            ...p,
+            subjects: updatedChapters
+              ? {
+                  ...p.subjects,
+                  [subject]: { ...subData, chapters: updatedChapters }
+                }
+              : p.subjects,
+            dailyPlans: {
+              ...(p.dailyPlans || {}),
+              [today]: updatedPlan
+            }
+          };
+        }
+        return p;
+      })
+    );
+
+    showNotification(`Added "${stageName} — ${chapterName}" to Today's Plan! 🎯`);
+  };
+
+  const handleAddStageToWeeklyPlan = (
+    subject: SubjectName,
+    chapterId: string,
+    chapterName: string,
+    stageName: string,
+    stageIdx: number,
+    targetDateStr?: string,
+    startTime = '15:00',
+    durationMinutes = 60
+  ) => {
+    if (!activeProfile) return;
+    let dateStr = targetDateStr;
+    if (!dateStr) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      dateStr = tomorrow.toISOString().split('T')[0];
+    }
+
+    const [startH, startM] = startTime.split(':').map(Number);
+    const totalEndMins = (startH || 0) * 60 + (startM || 0) + durationMinutes;
+    const endH = Math.min(23, Math.floor(totalEndMins / 60));
+    const endM = totalEndMins % 60;
+    const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+
+    const newBlock: CalendarBlock = {
+      id: 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      date: dateStr,
+      startTime,
+      endTime,
+      subject,
+      chapterId,
+      chapterName,
+      stageName,
+      stageIndex: stageIdx,
+      title: `${stageName} — ${chapterName}`,
+      isCompleted: false
+    };
+
+    setProfiles(prev =>
+      prev.map(p => {
+        if (p.id === activeProfile.id) {
+          return {
+            ...p,
+            calendarBlocks: [...(p.calendarBlocks || []), newBlock]
+          };
+        }
+        return p;
+      })
+    );
+
+    const formattedDate = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric'
+    });
+    showNotification(`Scheduled "${stageName}" on ${formattedDate} (${startTime}) in Weekly Calendar! 📅`);
   };
 
   // --- Handlers for Daily Energy & Exam Mode ---
@@ -899,8 +1165,33 @@ export default function App() {
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
+          let updatedSubjects = p.subjects;
+          if (updated.subject && (updated.chapterId || updated.chapterName) && p.subjects[updated.subject]) {
+            const subData = p.subjects[updated.subject];
+            const stages = p.customStages[updated.subject] || DEFAULT_STAGES[updated.subject] || [];
+            let stIdx = updated.stageIndex;
+            if (stIdx === undefined && updated.stageName) {
+              stIdx = stages.findIndex(s => s === updated.stageName);
+            }
+            if (stIdx !== undefined && stIdx >= 0) {
+              const updatedChapters = subData.chapters.map(ch => {
+                if (ch.id === updated.chapterId || ch.name === updated.chapterName) {
+                  const newStates = [...(ch.stageStates || [])];
+                  newStates[stIdx] = updated.isCompleted ? 2 : 1;
+                  return { ...ch, stageStates: newStates };
+                }
+                return ch;
+              });
+              updatedSubjects = {
+                ...p.subjects,
+                [updated.subject]: { ...subData, chapters: updatedChapters }
+              };
+            }
+          }
+
           return {
             ...p,
+            subjects: updatedSubjects,
             calendarBlocks: (p.calendarBlocks || []).map(b => (b.id === updated.id ? updated : b))
           };
         }
@@ -1447,6 +1738,9 @@ export default function App() {
             onAddChapter={handleAddChapter}
             onRestoreCBSE={handleRestoreCBSE}
             onToggleDifficulty={handleToggleDifficulty}
+            onAddToTodayPlan={handleAddStageToTodayPlan}
+            onAddToWeeklyPlan={handleAddStageToWeeklyPlan}
+            onOpenDailyPlanner={() => setShowDailyPlanModal(true)}
             onNavigateToMistakes={(sub, ch) => {
               setTargetSubjectForMistakes(sub);
               setTargetChapterForMistakes(ch);

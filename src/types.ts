@@ -130,6 +130,9 @@ export interface CalendarBlock {
   endTime: string; // "HH:MM"
   subject: SubjectName;
   chapterName?: string;
+  chapterId?: string;
+  stageName?: string;
+  stageIndex?: number;
   title: string;
   notes?: string;
   isCompleted?: boolean;

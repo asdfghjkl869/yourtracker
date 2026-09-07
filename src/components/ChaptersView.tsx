@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserProfile, SubjectName, ChapterDifficulty } from '../types';
+import { UserProfile, SubjectName, ChapterDifficulty, Chapter } from '../types';
 import { SUBJECTS, DEFAULT_STAGES, SYLLABUS_DATA } from '../data/cbseData';
 import { calculateChapterPriorityScore, getChapterMistakesCount } from '../utils/prioritizer';
 import {
@@ -16,7 +16,12 @@ import {
   AlertTriangle,
   Flame,
   ArrowUpDown,
-  Tag
+  Tag,
+  Calendar,
+  Zap,
+  Clock,
+  ListTodo,
+  X
 } from 'lucide-react';
 
 interface ChaptersViewProps {
@@ -31,6 +36,25 @@ interface ChaptersViewProps {
   onRestoreCBSE: (subject: SubjectName) => void;
   onToggleDifficulty?: (subject: SubjectName, chapterId: string, diff: ChapterDifficulty) => void;
   onNavigateToMistakes?: (subject: SubjectName, chapterName: string) => void;
+  onAddToTodayPlan?: (
+    subject: SubjectName,
+    chapterId: string,
+    chapterName: string,
+    stageName: string,
+    stageIdx: number,
+    durationMinutes?: number
+  ) => void;
+  onAddToWeeklyPlan?: (
+    subject: SubjectName,
+    chapterId: string,
+    chapterName: string,
+    stageName: string,
+    stageIdx: number,
+    targetDateStr?: string,
+    startTime?: string,
+    durationMinutes?: number
+  ) => void;
+  onOpenDailyPlanner?: () => void;
 }
 
 export const ChaptersView: React.FC<ChaptersViewProps> = ({
@@ -44,7 +68,10 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
   onAddChapter,
   onRestoreCBSE,
   onToggleDifficulty,
-  onNavigateToMistakes
+  onNavigateToMistakes,
+  onAddToTodayPlan,
+  onAddToWeeklyPlan,
+  onOpenDailyPlanner
 }) => {
   const [activeSubject, setActiveSubject] = useState<SubjectName>(initialSubject);
   const [filter, setFilter] = useState<'all' | 'incomplete' | 'completed' | 'mistakes'>('all');
@@ -62,6 +89,98 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
 
   const stagesList = profile.customStages[activeSubject] || DEFAULT_STAGES[activeSubject] || [];
   const subjectChapters = profile.subjects[activeSubject]?.chapters || [];
+
+  // Planner synchronization state
+  interface WeeklyScheduleModalState {
+    chapterId: string;
+    chapterName: string;
+    stageName: string;
+    stageIdx: number;
+  }
+  const [scheduleModalTarget, setScheduleModalTarget] = useState<WeeklyScheduleModalState | null>(null);
+  const [scheduleDayOffset, setScheduleDayOffset] = useState<number>(1);
+  const [scheduleTimeSlot, setScheduleTimeSlot] = useState<string>('15:00');
+  const [scheduleDuration, setScheduleDuration] = useState<number>(60);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayDailyPlan = profile.dailyPlans?.[todayStr];
+  const todayTasks = todayDailyPlan?.tasks || [];
+  const calendarBlocks = profile.calendarBlocks || [];
+
+  const isStageInTodayPlan = (chapterId: string, chapterName: string, stageTitle: string, sIdx: number) => {
+    return todayTasks.find(
+      t =>
+        t.subject === activeSubject &&
+        (t.chapterId === chapterId || t.chapterName === chapterName) &&
+        (t.stageIndex === sIdx || t.stageName === stageTitle)
+    );
+  };
+
+  const getStageWeeklyBlock = (chapterId: string, chapterName: string, stageTitle: string, sIdx: number) => {
+    return calendarBlocks.find(
+      b =>
+        b.subject === activeSubject &&
+        (b.chapterId === chapterId || b.chapterName === chapterName) &&
+        (b.stageIndex === sIdx || b.stageName === stageTitle)
+    );
+  };
+
+  const upcomingDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const dateStr = d.toISOString().split('T')[0];
+    const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' });
+    const dateFormatted = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return { offset: i, dateStr, dayName, dateFormatted };
+  });
+
+  const TIME_PRESETS = [
+    { label: 'Morning', time: '09:00', icon: '🌅' },
+    { label: 'Afternoon', time: '14:30', icon: '☀️' },
+    { label: 'Evening', time: '17:30', icon: '🌆' },
+    { label: 'Night', time: '20:30', icon: '🌙' },
+  ];
+
+  const handleAddNextStageToToday = (e: React.MouseEvent, ch: Chapter) => {
+    e.stopPropagation();
+    const stages = stagesList;
+    let nextIdx = -1;
+    for (let i = 0; i < stages.length; i++) {
+      if ((ch.stageStates || [])[i] === 1) {
+        nextIdx = i;
+        break;
+      }
+    }
+    if (nextIdx === -1) {
+      for (let i = 0; i < stages.length; i++) {
+        if ((ch.stageStates || [])[i] === 0) {
+          nextIdx = i;
+          break;
+        }
+      }
+    }
+    if (nextIdx === -1) {
+      nextIdx = Math.max(0, stages.length - 1);
+    }
+
+    onAddToTodayPlan?.(activeSubject, ch.id, ch.name, stages[nextIdx], nextIdx);
+  };
+
+  const handleConfirmScheduleWeekly = () => {
+    if (!scheduleModalTarget) return;
+    const targetDay = upcomingDays.find(d => d.offset === scheduleDayOffset);
+    onAddToWeeklyPlan?.(
+      activeSubject,
+      scheduleModalTarget.chapterId,
+      scheduleModalTarget.chapterName,
+      scheduleModalTarget.stageName,
+      scheduleModalTarget.stageIdx,
+      targetDay?.dateStr,
+      scheduleTimeSlot,
+      scheduleDuration
+    );
+    setScheduleModalTarget(null);
+  };
 
   const toggleAccordion = (id: string) => {
     setExpandedChapterIds(prev => ({ ...prev, [id]: !prev[id] }));
@@ -174,6 +293,49 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
             <RotateCcw className="h-3.5 w-3.5" />
             Restore CBSE
           </button>
+        </div>
+      </div>
+
+      {/* Planner Synchronization Status Banner */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#161b22]/80 p-3.5 sm:p-4 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#58a6ff]/15 text-[#58a6ff]">
+              <Zap className="h-4 w-4" />
+            </span>
+            <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#8b949e]">Today's Plan</div>
+              <div className="text-xs font-bold text-[#f0f6fc]">
+                {todayTasks.filter(t => t.subject === activeSubject).length} {activeSubject} stage{todayTasks.filter(t => t.subject === activeSubject).length === 1 ? '' : 's'} scheduled
+              </div>
+            </div>
+          </div>
+
+          <div className="h-7 w-px bg-white/10 hidden sm:block" />
+
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-purple-500/15 text-purple-400">
+              <Calendar className="h-4 w-4" />
+            </span>
+            <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#8b949e]">Weekly Calendar</div>
+              <div className="text-xs font-bold text-[#f0f6fc]">
+                {calendarBlocks.filter(b => b.subject === activeSubject).length} block{calendarBlocks.filter(b => b.subject === activeSubject).length === 1 ? '' : 's'} booked
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {onOpenDailyPlanner && (
+            <button
+              onClick={onOpenDailyPlanner}
+              className="flex items-center gap-1.5 rounded-xl border border-[#58a6ff]/40 bg-[#58a6ff]/10 px-3 py-1.5 text-xs font-bold text-[#58a6ff] hover:bg-[#58a6ff]/20 transition-all shadow-sm"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Auto Daily Planner</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -363,7 +525,37 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => handleAddNextStageToToday(e, ch)}
+                      className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-[#58a6ff]/30 bg-[#58a6ff]/10 px-2 py-1 text-[10px] font-bold text-[#58a6ff] hover:bg-[#58a6ff]/20 transition-colors"
+                      title="Add next pending stage of this chapter directly to Today's Plan"
+                    >
+                      <Zap className="h-3 w-3" />
+                      <span>+ Today</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nextIdx = ch.stageStates.findIndex(s => s !== 2);
+                        const targetIdx = nextIdx >= 0 ? nextIdx : 0;
+                        setScheduleModalTarget({
+                          chapterId: ch.id,
+                          chapterName: ch.name,
+                          stageName: stagesList[targetIdx] || 'Chapter Study',
+                          stageIdx: targetIdx
+                        });
+                      }}
+                      className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500/20 transition-colors"
+                      title="Schedule this chapter into Weekly Calendar"
+                    >
+                      <Calendar className="h-3 w-3" />
+                      <span>+ Weekly</span>
+                    </button>
+
                     <span className="text-xs font-bold text-[#8b949e]">
                       {doneCount}/{stagesList.length}
                     </span>
@@ -389,7 +581,7 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                   <div className="border-t border-white/10 bg-[#0b0f19]/60 p-4 sm:p-5">
                     <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-[11px] font-bold text-[#8b949e]">
                       <span>
-                        {stagesList.length} Preparation Stages • Click chip to cycle (Pending → In Progress → Done)
+                        {stagesList.length} Preparation Stages • Click chip header to cycle (Pending → In Progress → Done)
                       </span>
                       <span className="text-[#58a6ff]">
                         Smart Priority Ranking Score: {score}/100 ({urgencyTag})
@@ -400,18 +592,21 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                     <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
                       {stagesList.map((stageTitle, sIdx) => {
                         const st = ch.stageStates[sIdx] || 0;
-                        let chipBg = 'border-white/10 bg-white/[0.02] text-[#8b949e] hover:border-white/20 hover:text-[#f0f6fc]';
+                        const todayTask = isStageInTodayPlan(ch.id, ch.name, stageTitle, sIdx);
+                        const weeklyBlock = getStageWeeklyBlock(ch.id, ch.name, stageTitle, sIdx);
+
+                        let chipBg = 'border-white/10 bg-white/[0.02] text-[#8b949e] hover:border-white/20';
                         let badgeText = 'Pending';
                         let badgeColor = 'text-[#8b949e]';
                         let icon = '○';
 
                         if (st === 2) {
-                          chipBg = 'border-[#238636]/40 bg-[#238636]/15 text-[#3fb950]';
+                          chipBg = 'border-[#238636]/40 bg-[#238636]/10 text-[#3fb950]';
                           badgeText = 'Done';
                           badgeColor = 'text-[#3fb950]';
                           icon = '✓';
                         } else if (st === 1) {
-                          chipBg = 'border-[#d29922]/40 bg-[#d29922]/15 text-[#d29922]';
+                          chipBg = 'border-[#d29922]/40 bg-[#d29922]/10 text-[#d29922]';
                           badgeText = 'In Progress';
                           badgeColor = 'text-[#d29922]';
                           icon = '⏳';
@@ -420,16 +615,84 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                         return (
                           <div
                             key={sIdx}
-                            onClick={() => onCycleStage(activeSubject, ch.id, sIdx)}
-                            className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-xs font-bold transition-all select-none hover:scale-[1.01] ${chipBg}`}
+                            className={`flex flex-col justify-between rounded-xl border p-3 text-xs font-bold transition-all ${chipBg}`}
                           >
-                            <span className="flex items-center gap-1.5 truncate">
-                              <span>{icon}</span>
-                              <span className="truncate">{stageTitle}</span>
-                            </span>
-                            <span className={`text-[10px] uppercase tracking-wider font-extrabold ${badgeColor}`}>
-                              {badgeText}
-                            </span>
+                            {/* Clickable Header: Cycles Stage */}
+                            <div
+                              onClick={() => onCycleStage(activeSubject, ch.id, sIdx)}
+                              className="flex cursor-pointer items-center justify-between gap-2 select-none hover:opacity-85"
+                              title="Click to cycle status: Pending → In Progress → Done"
+                            >
+                              <span className="flex items-center gap-1.5 truncate text-[#f0f6fc]">
+                                <span className={badgeColor}>{icon}</span>
+                                <span className="truncate">{stageTitle}</span>
+                              </span>
+                              <span className={`text-[10px] uppercase tracking-wider font-extrabold shrink-0 ${badgeColor}`}>
+                                {badgeText}
+                              </span>
+                            </div>
+
+                            {/* Planner Actions & Sync Status Row */}
+                            <div className="mt-2.5 flex items-center justify-between gap-1.5 border-t border-white/5 pt-2">
+                              {/* Today's Plan Button / Status */}
+                              {todayTask ? (
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                                    todayTask.isCompleted
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : 'bg-[#58a6ff]/20 text-[#58a6ff] border border-[#58a6ff]/30'
+                                  }`}
+                                  title={todayTask.isCompleted ? "Completed in Today's Quests" : "In Today's Plan"}
+                                >
+                                  <span>🎯</span>
+                                  <span>{todayTask.isCompleted ? 'Done (Today)' : 'Today'}</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onAddToTodayPlan?.(activeSubject, ch.id, ch.name, stageTitle, sIdx);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold text-[#8b949e] hover:border-[#58a6ff]/50 hover:bg-[#58a6ff]/15 hover:text-[#58a6ff] transition-all"
+                                  title="Add this stage to Today's Daily Plan"
+                                >
+                                  <Zap className="h-2.5 w-2.5 text-[#58a6ff]" />
+                                  <span>+ Today</span>
+                                </button>
+                              )}
+
+                              {/* Weekly Plan Button / Status */}
+                              {weeklyBlock ? (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-md border border-purple-500/30 bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300 truncate max-w-[120px]"
+                                  title={`Booked for ${weeklyBlock.date} at ${weeklyBlock.startTime}`}
+                                >
+                                  <span>📅</span>
+                                  <span className="truncate">
+                                    {new Date(weeklyBlock.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })} {weeklyBlock.startTime}
+                                  </span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setScheduleModalTarget({
+                                      chapterId: ch.id,
+                                      chapterName: ch.name,
+                                      stageName: stageTitle,
+                                      stageIdx: sIdx
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold text-[#8b949e] hover:border-purple-400/50 hover:bg-purple-500/15 hover:text-purple-300 transition-all"
+                                  title="Schedule this stage into Weekly Calendar"
+                                >
+                                  <Calendar className="h-2.5 w-2.5 text-purple-400" />
+                                  <span>+ Weekly</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
@@ -438,6 +701,34 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                     {/* Quick Chapter Action Buttons */}
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => handleAddNextStageToToday(e, ch)}
+                          className="flex items-center gap-1.5 rounded-xl border border-[#58a6ff]/40 bg-[#58a6ff]/10 px-3 py-1.5 text-xs font-bold text-[#58a6ff] hover:bg-[#58a6ff]/20 transition-all"
+                          title="Add the next unfinished stage to Today's Plan"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          <span>+ Today's Plan</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const nextIdx = ch.stageStates.findIndex(s => s !== 2);
+                            const targetIdx = nextIdx >= 0 ? nextIdx : 0;
+                            setScheduleModalTarget({
+                              chapterId: ch.id,
+                              chapterName: ch.name,
+                              stageName: stagesList[targetIdx] || 'Chapter Study',
+                              stageIdx: targetIdx
+                            });
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl border border-purple-500/40 bg-purple-500/10 px-3 py-1.5 text-xs font-bold text-purple-300 hover:bg-purple-500/20 transition-all"
+                          title="Schedule this chapter in Weekly Calendar"
+                        >
+                          <Calendar className="h-3.5 w-3.5" />
+                          <span>+ Weekly Plan</span>
+                        </button>
                         <button
                           onClick={() => onMarkAllDone(activeSubject, ch.id)}
                           className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs font-semibold text-[#8b949e] hover:border-[#238636]/50 hover:text-[#3fb950]"
@@ -557,6 +848,142 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                 className="flex-1 rounded-xl bg-[#58a6ff] py-2 text-xs font-bold text-[#0b0f19] hover:bg-sky-400"
               >
                 Save Rename
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Quick Weekly Schedule Modal */}
+      {scheduleModalTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="bento-card w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="card-title m-0">
+                <span>📅</span>
+                <span>Schedule to Weekly Plan</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScheduleModalTarget(null)}
+                className="rounded-lg p-1 text-[#8b949e] hover:bg-white/10 hover:text-[#f0f6fc]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-[#0b0f19] p-3">
+              <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#58a6ff]">
+                {activeSubject}
+              </div>
+              <div className="text-sm font-bold text-[#f0f6fc] truncate">
+                {scheduleModalTarget.chapterName}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-300">
+                <span>🎯 Stage:</span>
+                <span className="font-bold">{scheduleModalTarget.stageName}</span>
+              </div>
+            </div>
+
+            {/* Target Day Selector */}
+            <div>
+              <label className="text-xs font-bold text-[#8b949e] mb-1.5 block">
+                Select Day
+              </label>
+              <div className="grid grid-cols-4 gap-1.5">
+                {upcomingDays.map(d => {
+                  const isSelected = scheduleDayOffset === d.offset;
+                  return (
+                    <button
+                      key={d.offset}
+                      type="button"
+                      onClick={() => setScheduleDayOffset(d.offset)}
+                      className={`flex flex-col items-center rounded-xl border p-2 text-center transition-all ${
+                        isSelected
+                          ? 'border-purple-500 bg-purple-500/20 text-purple-200'
+                          : 'border-white/10 bg-white/[0.02] text-[#8b949e] hover:border-white/20 hover:text-[#f0f6fc]'
+                      }`}
+                    >
+                      <span className="text-[10px] font-bold uppercase">{d.dayName}</span>
+                      <span className="text-xs font-extrabold">{d.dateFormatted}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Time Slot Presets */}
+            <div>
+              <label className="text-xs font-bold text-[#8b949e] mb-1.5 block">
+                Time Slot
+              </label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {TIME_PRESETS.map(preset => {
+                  const isSelected = scheduleTimeSlot === preset.time;
+                  return (
+                    <button
+                      key={preset.time}
+                      type="button"
+                      onClick={() => setScheduleTimeSlot(preset.time)}
+                      className={`flex items-center justify-center gap-1 rounded-xl border p-2 text-xs font-bold transition-all ${
+                        isSelected
+                          ? 'border-[#58a6ff] bg-[#58a6ff]/20 text-[#58a6ff]'
+                          : 'border-white/10 bg-white/[0.02] text-[#8b949e] hover:border-white/20 hover:text-[#f0f6fc]'
+                      }`}
+                    >
+                      <span>{preset.icon}</span>
+                      <span>{preset.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[11px] text-[#8b949e]">Or Custom Time:</span>
+                <input
+                  type="time"
+                  value={scheduleTimeSlot}
+                  onChange={e => setScheduleTimeSlot(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-[#0b0f19] px-2 py-1 text-xs text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
+                />
+              </div>
+            </div>
+
+            {/* Duration Selector */}
+            <div>
+              <label className="text-xs font-bold text-[#8b949e] mb-1.5 block">
+                Study Duration
+              </label>
+              <div className="flex gap-2">
+                {[30, 45, 60, 90].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setScheduleDuration(mins)}
+                    className={`flex-1 rounded-xl border py-1.5 text-xs font-bold transition-all ${
+                      scheduleDuration === mins
+                        ? 'border-emerald-500 bg-emerald-500/20 text-emerald-300'
+                        : 'border-white/10 bg-white/[0.02] text-[#8b949e] hover:border-white/20'
+                    }`}
+                  >
+                    {mins}m
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-2 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setScheduleModalTarget(null)}
+                className="flex-1 rounded-xl border border-white/10 bg-white/[0.02] py-2 text-xs font-bold text-[#8b949e] hover:bg-white/[0.05]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmScheduleWeekly}
+                className="flex-1 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 py-2 text-xs font-bold text-white hover:brightness-110 shadow-lg shadow-purple-500/25"
+              >
+                Book Weekly Block
               </button>
             </div>
           </div>
