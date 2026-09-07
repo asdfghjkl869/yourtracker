@@ -1251,6 +1251,10 @@ export default function App() {
           return {
             ...p,
             energyLevel: energy,
+            energyLevels: {
+              ...(p.energyLevels || {}),
+              [today]: energy
+            },
             lastEnergyCheckinDate: today
           };
         }
@@ -1593,6 +1597,14 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         onTabChange={tab => setActiveTab(tab)}
         onOpenEnergyCheckin={() => setShowEnergyModal(true)}
+        onOpenEnergyModal={() => setShowEnergyModal(true)}
+        onExamModeChange={mode => {
+          if (!activeProfile) return;
+          setProfiles(prev =>
+            prev.map(p => (p.id === activeProfile.id ? { ...p, examMode: mode } : p))
+          );
+          showNotification(`Exam mode set to ${mode}! 🎯`);
+        }}
         onToggleExamMode={handleToggleExamMode}
       />
 
@@ -1636,16 +1648,6 @@ export default function App() {
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>Generate Today's Plan</span>
-                </button>
-
-                {/* Energy Check-in quick badge */}
-                <button
-                  onClick={() => setShowEnergyModal(true)}
-                  className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#161b22] px-3 py-1.5 text-xs font-semibold text-[#f0f6fc] hover:border-white/20 transition-colors"
-                  title="Daily Energy Check-in"
-                >
-                  <span>{activeProfile.energyLevel === 'High' ? '⚡' : activeProfile.energyLevel === 'Low' ? '🪫' : '🔋'}</span>
-                  <span className="font-bold">{activeProfile.energyLevel || 'Medium'} Energy</span>
                 </button>
 
                 <div className="rounded-full border border-white/10 bg-[#161b22] px-3.5 py-1.5 text-xs font-semibold text-[#f0f6fc]">

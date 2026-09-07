@@ -39,33 +39,88 @@ export const DailyStudyChart: React.FC<DailyStudyChartProps> = ({
     onSelectDate?.(todayStr);
   };
 
-  // Planned blocks for this date
+  // 1. Planned study minutes: Combine calendar blocks and generated daily plan tasks
   const plannedBlocks = (profile.calendarBlocks || []).filter(b => b.date === selectedDate);
-  const totalPlannedMinutes = plannedBlocks.reduce((sum, b) => {
-    const [sh, sm] = b.startTime.split(':').map(Number);
-    const [eh, em] = b.endTime.split(':').map(Number);
-    const dur = (eh * 60 + em) - (sh * 60 + sm);
-    return sum + (dur > 0 ? dur : 60);
-  }, 0);
+  const dayPlan = profile.dailyPlans?.[selectedDate];
+  const dailyTasks = dayPlan?.tasks || [];
 
-  // Actual sessions logged for this date
-  const actualSessions = (profile.sessions || []).filter(s => s.timestamp.startsWith(selectedDate));
-  const totalActualMinutes = actualSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
-
-  // Subject breakdown for actual study
-  const actualBySubject: Record<string, number> = {};
-  actualSessions.forEach(s => {
-    actualBySubject[s.subject] = (actualBySubject[s.subject] || 0) + (s.durationMinutes || 0);
-  });
-
-  // Subject breakdown for planned blocks
   const plannedBySubject: Record<string, number> = {};
+
+  // Add minutes from calendar blocks
   plannedBlocks.forEach(b => {
     const [sh, sm] = b.startTime.split(':').map(Number);
     const [eh, em] = b.endTime.split(':').map(Number);
     const dur = (eh * 60 + em) - (sh * 60 + sm);
-    plannedBySubject[b.subject] = (plannedBySubject[b.subject] || 0) + (dur > 0 ? dur : 60);
+    const mins = dur > 0 ? dur : 60;
+    plannedBySubject[b.subject] = (plannedBySubject[b.subject] || 0) + mins;
   });
+
+  // Add minutes from daily plan tasks not already mirrored in calendar blocks
+  dailyTasks.forEach(t => {
+    const isAlreadyInBlocks = plannedBlocks.some(b =>
+      b.id === t.id ||
+      b.id === `blk_${t.id}` ||
+      (b.subject === t.subject &&
+        ((t.chapterName && b.chapterName === t.chapterName) ||
+          b.title === (t.title || t.taskTitle)))
+    );
+    if (!isAlreadyInBlocks) {
+      plannedBySubject[t.subject] = (plannedBySubject[t.subject] || 0) + (t.estimatedMinutes || 45);
+    }
+  });
+
+  let totalPlannedMinutes = Object.values(plannedBySubject).reduce((sum, v) => sum + v, 0);
+  if (dayPlan?.targetTotalMinutes && dayPlan.targetTotalMinutes > totalPlannedMinutes) {
+    totalPlannedMinutes = dayPlan.targetTotalMinutes;
+  }
+
+  // 2. Actual studied minutes: Combine logged study sessions, completed calendar blocks, and completed quest tasks
+  const actualBySubject: Record<string, number> = {};
+
+  // Logged sessions for this date
+  const actualSessions = (profile.sessions || []).filter(s =>
+    (s.timestamp || s.date || '').startsWith(selectedDate)
+  );
+  actualSessions.forEach(s => {
+    actualBySubject[s.subject] = (actualBySubject[s.subject] || 0) + (s.durationMinutes || 0);
+  });
+
+  // Completed calendar blocks (if a session was not already logged for this block)
+  plannedBlocks
+    .filter(b => b.isCompleted)
+    .forEach(b => {
+      const hasMatchingSession = actualSessions.some(s =>
+        s.subject === b.subject &&
+        (s.chapterName === b.chapterName || (b.title && s.notes?.includes(b.title)))
+      );
+      if (!hasMatchingSession) {
+        const [sh, sm] = b.startTime.split(':').map(Number);
+        const [eh, em] = b.endTime.split(':').map(Number);
+        const dur = (eh * 60 + em) - (sh * 60 + sm);
+        const mins = dur > 0 ? dur : 60;
+        actualBySubject[b.subject] = (actualBySubject[b.subject] || 0) + mins;
+      }
+    });
+
+  // Completed daily tasks (if not already counted in blocks or sessions)
+  dailyTasks
+    .filter(t => t.isCompleted ?? t.completed)
+    .forEach(t => {
+      const hasMatchingBlock = plannedBlocks.some(b =>
+        b.isCompleted &&
+        (b.id === t.id ||
+          b.id === `blk_${t.id}` ||
+          (b.subject === t.subject && b.chapterName === t.chapterName))
+      );
+      const hasMatchingSession = actualSessions.some(s =>
+        s.subject === t.subject && s.chapterName === t.chapterName
+      );
+      if (!hasMatchingBlock && !hasMatchingSession) {
+        actualBySubject[t.subject] = (actualBySubject[t.subject] || 0) + (t.estimatedMinutes || 45);
+      }
+    });
+
+  const totalActualMinutes = Object.values(actualBySubject).reduce((sum, m) => sum + m, 0);
 
   const plannedHours = (totalPlannedMinutes / 60).toFixed(1);
   const actualHours = (totalActualMinutes / 60).toFixed(1);
@@ -127,8 +182,9 @@ export const DailyStudyChart: React.FC<DailyStudyChartProps> = ({
           <div className="text-lg sm:text-xl font-black text-[#58a6ff] mt-0.5">
             {plannedHours} <span className="text-xs font-medium text-[#8b949e]">hrs</span>
           </div>
-          <div className="text-[10px] text-[#8b949e] mt-1">
-            {plannedBlocks.length} planned block{plannedBlocks.length === 1 ? '' : 's'}
+          <div className="text-[10px] text-[#8b949e] mt-1 truncate">
+            {plannedBlocks.length} block{plannedBlocks.length === 1 ? '' : 's'}
+            {dailyTasks.length > 0 ? ` · ${dailyTasks.length} quest task${dailyTasks.length === 1 ? '' : 's'}` : ''}
           </div>
         </div>
 
@@ -137,8 +193,11 @@ export const DailyStudyChart: React.FC<DailyStudyChartProps> = ({
           <div className="text-lg sm:text-xl font-black text-[#3fb950] mt-0.5">
             {actualHours} <span className="text-xs font-medium text-[#8b949e]">hrs</span>
           </div>
-          <div className="text-[10px] text-[#8b949e] mt-1">
-            {actualSessions.length} logged session{actualSessions.length === 1 ? '' : 's'}
+          <div className="text-[10px] text-[#8b949e] mt-1 truncate">
+            {actualSessions.length} session{actualSessions.length === 1 ? '' : 's'}
+            {plannedBlocks.filter(b => b.isCompleted).length > 0
+              ? ` · ${plannedBlocks.filter(b => b.isCompleted).length} done`
+              : ''}
           </div>
         </div>
 
@@ -147,12 +206,14 @@ export const DailyStudyChart: React.FC<DailyStudyChartProps> = ({
           <div className="text-lg sm:text-xl font-black text-[#f0f6fc] mt-0.5">
             {progressPercent}%
           </div>
-          <div className="text-[10px] text-[#8b949e] mt-1">
+          <div className="text-[10px] text-[#8b949e] mt-1 truncate">
             {totalActualMinutes >= totalPlannedMinutes && totalPlannedMinutes > 0
               ? 'Goal Achieved! 🎯'
               : totalPlannedMinutes === 0
-              ? 'No blocks set'
-              : `${Math.round(totalPlannedMinutes - totalActualMinutes)}m remaining`}
+              ? totalActualMinutes > 0
+                ? 'Study recorded'
+                : 'No plans set'
+              : `${Math.max(0, Math.round(totalPlannedMinutes - totalActualMinutes))}m remaining`}
           </div>
         </div>
       </div>

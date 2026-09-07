@@ -62,7 +62,11 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
 }) => {
   const todayStr = getLocalDateString(new Date());
   const existingPlan = profile.dailyPlans ? profile.dailyPlans[todayStr] : undefined;
-  const initialEnergy = (profile.energyLevels && profile.energyLevels[todayStr]) || existingPlan?.energyLevel || 'Medium';
+  const initialEnergy: EnergyLevel =
+    profile.energyLevel ||
+    (profile.energyLevels && profile.energyLevels[todayStr]) ||
+    existingPlan?.energyLevel ||
+    'Medium';
   const initialDiversity: PlanDiversityMode = existingPlan?.diversityMode || 'balanced';
   const initialFocus: SubjectName = existingPlan?.focusSubject || 'Mathematics';
   const initialStageFocus: StageFocusCategory = existingPlan?.stageFocus || 'all';
@@ -76,6 +80,8 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
   const [showCustomStageSelector, setShowCustomStageSelector] = useState<boolean>(initialStageFocus === 'custom');
   const [stagePickerSubject, setStagePickerSubject] = useState<SubjectName>(initialFocus);
   const [openStageMenuTaskId, setOpenStageMenuTaskId] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [generatedFeedback, setGeneratedFeedback] = useState<string | null>(null);
 
   const [tasks, setTasks] = useState<DailyTask[]>(() => {
     if (existingPlan?.tasks && existingPlan.tasks.length > 0) {
@@ -91,15 +97,22 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
     ).tasks;
   });
 
-  // Keep tasks synced whenever modal opens or profile dailyPlans updates
+  // Keep energy & tasks synced whenever modal opens or profile dailyPlans updates
   useEffect(() => {
     if (isOpen) {
+      const currentSelectedEnergy: EnergyLevel =
+        profile.energyLevel ||
+        (profile.energyLevels && profile.energyLevels[todayStr]) ||
+        existingPlan?.energyLevel ||
+        'Medium';
+      setEnergy(currentSelectedEnergy);
+
       const plan = profile.dailyPlans?.[todayStr];
       if (plan?.tasks && plan.tasks.length > 0) {
         setTasks(plan.tasks);
       }
     }
-  }, [isOpen, profile.dailyPlans, todayStr]);
+  }, [isOpen, profile.energyLevel, profile.dailyPlans, todayStr]);
 
   // Custom task form state
   const [isAddingTask, setIsAddingTask] = useState(false);
@@ -126,6 +139,7 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
     selectedStageFocus = stageFocus,
     selectedStages = selectedCustomStages
   ) => {
+    setIsGenerating(true);
     const freshPlan = generateDailyPlan(
       profile,
       selectedEnergy,
@@ -136,6 +150,14 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
     );
     setTasks(freshPlan.tasks);
     setOpenStageMenuTaskId(null);
+    const hours = (freshPlan.targetTotalMinutes / 60).toFixed(1);
+    setGeneratedFeedback(`✨ Generated plan: ${freshPlan.tasks.length} tasks (${hours}h) for ${selectedEnergy} Energy!`);
+    setTimeout(() => {
+      setIsGenerating(false);
+    }, 250);
+    setTimeout(() => {
+      setGeneratedFeedback(prev => (prev?.includes(`${freshPlan.tasks.length} tasks`) ? null : prev));
+    }, 3500);
   };
 
   const handleEnergySelect = (lvl: EnergyLevel) => {
@@ -333,6 +355,23 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
 
         {/* Scrollable Body */}
         <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+          {/* Visual Generation Feedback Banner */}
+          {generatedFeedback && (
+            <div className="flex items-center justify-between rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2.5 text-xs font-semibold text-sky-200 transition-all">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 shrink-0 text-sky-400 animate-pulse" />
+                <span>{generatedFeedback}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGeneratedFeedback(null)}
+                className="text-xs text-sky-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Energy Check-in Selector */}
           <div className="rounded-2xl border border-white/10 bg-[#161b22] p-3.5 sm:p-4">
             <div className="mb-2 flex items-center justify-between">
@@ -996,12 +1035,13 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
               </button>
               <button
                 type="button"
+                disabled={isGenerating}
                 onClick={() => handleRegenerate()}
-                className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#161b22] px-4 py-2.5 text-xs font-bold text-[#8b949e] hover:text-[#f0f6fc]"
+                className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#161b22] px-4 py-2.5 text-xs font-bold text-[#8b949e] hover:text-[#f0f6fc] disabled:opacity-60 transition-all"
                 title="Regenerate plan with multi-subject balance & stage focus"
               >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Regenerate
+                <RotateCcw className={`h-3.5 w-3.5 ${isGenerating ? 'animate-spin text-[#58a6ff]' : ''}`} />
+                <span>{isGenerating ? 'Regenerating...' : 'Regenerate'}</span>
               </button>
             </div>
           )}

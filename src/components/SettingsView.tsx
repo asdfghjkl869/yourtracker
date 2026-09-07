@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, SubjectName, ClassLevel } from '../types';
-import { SUBJECTS, DEFAULT_STAGES, SYLLABUS_DATA } from '../data/cbseData';
-import { Save, RotateCcw, Plus, Scissors, ArrowUp, ArrowDown, Download, Upload, AlertTriangle, Check, Trash2 } from 'lucide-react';
+import { SUBJECTS, DEFAULT_STAGES, SYLLABUS_DATA, getDefaultDatesheet } from '../data/cbseData';
+import { formatDateIndian, getDaysRemaining } from '../utils/helpers';
+import { Save, RotateCcw, Plus, Scissors, ArrowUp, ArrowDown, Download, Upload, AlertTriangle, Check, Trash2, Calendar } from 'lucide-react';
 
 interface SettingsViewProps {
   profile: UserProfile;
@@ -37,6 +38,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [customStages, setCustomStages] = useState<Record<string, string[]>>(() => {
     return JSON.parse(JSON.stringify(profile.customStages || DEFAULT_STAGES));
   });
+
+  // Sync state if profile changes
+  useEffect(() => {
+    setStudentName(profile.name);
+    setClassLevel(profile.classLevel);
+    const map: Record<string, string> = {};
+    SUBJECTS.forEach(sub => {
+      map[sub] = profile.subjects[sub]?.examDate || '';
+    });
+    setDatesheet(map);
+    setCustomStages(JSON.parse(JSON.stringify(profile.customStages || DEFAULT_STAGES)));
+  }, [profile]);
+
+  const handleResetDatesheetToCBSE = () => {
+    const defaultMap = getDefaultDatesheet(classLevel);
+    setDatesheet(defaultMap);
+  };
 
   // Save student info & datesheet
   const handleSaveGeneral = () => {
@@ -190,21 +208,58 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Datesheet Grid */}
         <div className="mt-6 border-t border-white/10 pt-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-[#8b949e]">
-            Subject Exam Dates (CBSE Datesheet)
-          </h4>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[#8b949e]">
+              Subject Exam Dates (CBSE Datesheet)
+            </h4>
+            <button
+              type="button"
+              onClick={handleResetDatesheetToCBSE}
+              className="flex items-center gap-1.5 text-xs font-bold text-[#58a6ff] hover:underline"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset to CBSE 2026 Board Schedule
+            </button>
+          </div>
+
           <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-            {SUBJECTS.map(sub => (
-              <div key={sub} className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
-                <label className="text-xs font-bold text-[#f0f6fc]">{sub}</label>
-                <input
-                  type="date"
-                  value={datesheet[sub] || ''}
-                  onChange={e => setDatesheet(prev => ({ ...prev, [sub]: e.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#0b0f19] px-2.5 py-1.5 text-xs text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
-                />
-              </div>
-            ))}
+            {SUBJECTS.map(sub => {
+              const dateVal = datesheet[sub] || '';
+              const daysLeft = getDaysRemaining(dateVal);
+              const isPassed = daysLeft < 0;
+
+              return (
+                <div key={sub} className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-[#f0f6fc]">{sub}</label>
+                    {dateVal && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                          isPassed
+                            ? 'bg-white/[0.05] text-[#8b949e]'
+                            : daysLeft <= 15
+                            ? 'bg-[#d29922]/15 text-[#d29922]'
+                            : 'bg-[#58a6ff]/15 text-[#58a6ff]'
+                        }`}
+                      >
+                        {isPassed ? 'Completed' : `${daysLeft}d left`}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="date"
+                    value={dateVal}
+                    onChange={e => setDatesheet(prev => ({ ...prev, [sub]: e.target.value }))}
+                    className="mt-1.5 w-full rounded-xl border border-white/10 bg-[#0b0f19] px-2.5 py-1.5 text-xs text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
+                  />
+                  {dateVal && (
+                    <div className="mt-1 flex items-center gap-1 text-[11px] text-[#8b949e]">
+                      <span>📅 {formatDateIndian(dateVal)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <button

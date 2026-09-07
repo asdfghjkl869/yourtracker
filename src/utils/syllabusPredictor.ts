@@ -1,5 +1,5 @@
 import { UserProfile, SubjectName } from '../types';
-import { SUBJECTS, DEFAULT_STAGES } from '../data/cbseData';
+import { SUBJECTS, DEFAULT_STAGES, getDefaultDatesheet } from '../data/cbseData';
 import { getDaysRemaining, formatDateIndian } from './helpers';
 
 export interface SubjectPrediction {
@@ -33,19 +33,47 @@ export interface GlobalSyllabusPrediction {
 
 export function calculateSyllabusPrediction(profile: UserProfile): GlobalSyllabusPrediction {
   const now = new Date();
+  const defaultDates = getDefaultDatesheet();
   const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-  // 1. Calculate actual recent velocity from sessions & stages
+  // 1. Calculate actual recent study velocity (last 7-14 days)
   const recentSessions = (profile.sessions || []).filter(
-    s => new Date(s.timestamp) >= fourteenDaysAgo
+    s => new Date(s.timestamp || s.date) >= fourteenDaysAgo
   );
-  const totalRecentHours = recentSessions.reduce((acc, s) => acc + (s.durationMinutes || 0) / 60, 0);
+  const sessionHours = recentSessions.reduce((acc, s) => acc + (s.durationMinutes || 0) / 60, 0);
 
-  // Approximate that 1.25 hours of focused study completes 1 stage
-  const stagesFromHours = totalRecentHours > 0 ? totalRecentHours / 1.25 : 0;
-  
-  // Daily rate over 14 days (with a floor of 1.2 stages/day so fresh accounts have a reasonable baseline prediction)
-  const estimatedDailyStages = Math.max(1.2, Math.round((stagesFromHours / 14) * 10) / 10);
+  // Include completed calendar blocks in the velocity calculation
+  const recentCompletedBlocks = (profile.calendarBlocks || []).filter(b => {
+    if (!b.isCompleted) return false;
+    const bDate = new Date(b.date);
+    return bDate >= fourteenDaysAgo && bDate <= now;
+  });
+  const blockHours = recentCompletedBlocks.reduce((acc, b) => {
+    const [sh, sm] = b.startTime.split(':').map(Number);
+    const [eh, em] = b.endTime.split(':').map(Number);
+    const dur = (eh * 60 + em) - (sh * 60 + sm);
+    return acc + (dur > 0 ? dur : 60) / 60;
+  }, 0);
+
+  const totalRecentStudyHours = sessionHours + blockHours;
+  const uniqueActiveDays = new Set([
+    ...recentSessions.map(s => (s.timestamp || s.date || '').split('T')[0]),
+    ...recentCompletedBlocks.map(b => b.date)
+  ]).size;
+
+  // Baseline daily stages based on energy level for CBSE board exams sprint (Class 10/12)
+  const energy = profile.energyLevel || 'Medium';
+  const baselineRateByEnergy = energy === 'High' ? 5.8 : energy === 'Low' ? 3.4 : 4.6;
+
+  let estimatedDailyStages = baselineRateByEnergy;
+  if (totalRecentStudyHours > 0) {
+    const activeDays = Math.max(uniqueActiveDays, 3);
+    const avgDailyHours = totalRecentStudyHours / activeDays;
+    // In an intensive board sprint, ~45-50 mins (0.8h) focused work covers 1 syllabus stage/revision unit
+    const sessionVelocity = avgDailyHours / 0.8;
+    // Blend observed velocity (65%) with baseline energy pacing (35%)
+    estimatedDailyStages = Math.max(3.2, Math.round((sessionVelocity * 0.65 + baselineRateByEnergy * 0.35) * 10) / 10);
+  }
 
   let globalTotalChapters = 0;
   let globalTotalStages = 0;
@@ -55,47 +83,76 @@ export function calculateSyllabusPrediction(profile: UserProfile): GlobalSyllabu
   let nearestExamSubject: SubjectName = 'Mathematics';
   let minDaysLeft = 999;
 
+  // 2. Identify nearest exam date & subject stats
   SUBJECTS.forEach(sub => {
     const subData = profile.subjects[sub];
-    const stages = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
-    const chapters = subData?.chapters || [];
-    const daysLeft = getDaysRemaining(subData?.examDate || '');
+    const examDate = subData?.examDate || defaultDates[sub] || '2026-10-15';
+    const daysLeft = getDaysRemaining(examDate);
 
     if (daysLeft >= 0 && daysLeft < minDaysLeft) {
       minDaysLeft = daysLeft;
       nearestExamSubject = sub;
     }
+  });
+
+  if (minDaysLeft === 999) {
+    minDaysLeft = 38; // Default to mid-October 2026
+    nearestExamSubject = 'Mathematics';
+  }
+
+  // 3. Process each subject
+  SUBJECTS.forEach(sub => {
+    const subData = profile.subjects[sub];
+    const stages = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
+    const chapters = subData?.chapters || [];
+    const examDate = subData?.examDate || defaultDates[sub] || '2026-10-15';
+    const daysLeft = getDaysRemaining(examDate);
 
     const totalSubStages = chapters.length * stages.length;
-    let completedSubStages = 0;
+    let completedSubUnits = 0;
 
     chapters.forEach(ch => {
       const states = ch.stageStates || [];
       states.slice(0, stages.length).forEach(st => {
-        if (st === 2) completedSubStages++;
+        if (st === 2) {
+          completedSubUnits += 1;
+        } else if (st === 1) {
+          // Half-credit for in-progress stages so progress is never stuck at 0%
+          completedSubUnits += 0.5;
+        }
       });
     });
 
+    const completedSubStages = Math.round(completedSubUnits);
     const remainingSubStages = Math.max(0, totalSubStages - completedSubStages);
-    const percent = totalSubStages > 0 ? Math.round((completedSubStages / totalSubStages) * 100) : 0;
+    const percent = totalSubStages > 0 ? Math.round((completedSubUnits / totalSubStages) * 100) : 0;
 
-    // Allocate velocity proportionally to this subject (out of 7 subjects)
-    const subDailyRate = Math.max(0.3, Math.round((estimatedDailyStages / 3.5) * 10) / 10);
-    const daysNeeded = subDailyRate > 0 ? Math.ceil(remainingSubStages / subDailyRate) : 90;
+    // Weight allocation for this subject: Math & Science get slightly higher daily focus
+    const subWeight = sub === 'Mathematics' || sub === 'Physics' || sub === 'Chemistry' ? 1.2 : 0.9;
+    const subDailyRate = Math.max(0.5, Math.round(((estimatedDailyStages / 7) * subWeight) * 10) / 10);
 
-    const predictedDate = new Date(now.getTime() + daysNeeded * 24 * 60 * 60 * 1000);
+    // Subject completion prediction:
+    // If behind, cap projection to around or slightly after the subject exam date (within 3-7 days max)
+    const rawSubDaysNeeded = subDailyRate > 0 ? Math.ceil(remainingSubStages / subDailyRate) : 30;
+    const targetSprintDays = Math.max(1, daysLeft);
+
+    let effectiveSubDaysNeeded = rawSubDaysNeeded;
+    if (rawSubDaysNeeded > targetSprintDays) {
+      // Lagging: project around exam date (not months later)
+      effectiveSubDaysNeeded = Math.min(targetSprintDays + 6, rawSubDaysNeeded);
+    }
+
+    const predictedDate = new Date(now.getTime() + effectiveSubDaysNeeded * 24 * 60 * 60 * 1000);
     const predictedCompletionDateStr = formatDateIndian(predictedDate.toISOString().split('T')[0]);
-
-    // Difference between exam day and predicted completion
-    const daysDiffWithExam = daysLeft - daysNeeded;
+    const daysDiffWithExam = daysLeft - rawSubDaysNeeded;
 
     let status: 'on-track' | 'tight' | 'behind' = 'on-track';
     let recommendation = 'Pace is ideal! Maintain consistency.';
 
     if (remainingSubStages === 0) {
       status = 'on-track';
-      recommendation = 'Syllabus 100% complete! Focus on PYQ sample papers.';
-    } else if (daysDiffWithExam >= 7) {
+      recommendation = 'Syllabus 100% complete! Focus on PYQs and sample papers.';
+    } else if (daysDiffWithExam >= 6) {
       status = 'on-track';
       recommendation = `On schedule with ${daysDiffWithExam} days buffer for full revision.`;
     } else if (daysDiffWithExam >= 0) {
@@ -104,14 +161,13 @@ export function calculateSyllabusPrediction(profile: UserProfile): GlobalSyllabu
     } else {
       status = 'behind';
       const shortage = Math.abs(daysDiffWithExam);
-      recommendation = `Lagging by ~${shortage} days. Increase pace to ${(
-        remainingSubStages / Math.max(1, daysLeft)
-      ).toFixed(1)} stages/day.`;
+      const reqPace = (remainingSubStages / Math.max(1, daysLeft)).toFixed(1);
+      recommendation = `Lagging by ~${shortage} days. Increase pace to ${reqPace} stages/day to finish before exam.`;
     }
 
     subjectPredictions[sub] = {
       subject: sub,
-      examDate: subData?.examDate || '',
+      examDate,
       daysLeft,
       totalStages: totalSubStages,
       completedStages: completedSubStages,
@@ -126,26 +182,45 @@ export function calculateSyllabusPrediction(profile: UserProfile): GlobalSyllabu
 
     globalTotalChapters += chapters.length;
     globalTotalStages += totalSubStages;
-    globalCompletedStages += completedSubStages;
+    globalCompletedStages += completedSubUnits;
   });
 
-  const globalRemainingStages = Math.max(0, globalTotalStages - globalCompletedStages);
+  const roundedGlobalCompleted = Math.round(globalCompletedStages);
+  const globalRemainingStages = Math.max(0, globalTotalStages - roundedGlobalCompleted);
   const globalPercent = globalTotalStages > 0 ? Math.round((globalCompletedStages / globalTotalStages) * 100) : 0;
-  const globalDaysNeeded = Math.ceil(globalRemainingStages / estimatedDailyStages);
-  const globalPredictedDate = new Date(now.getTime() + globalDaysNeeded * 24 * 60 * 60 * 1000);
+
+  // 4. Global Projected Full Completion Date:
+  // For mid-October 2026 board exams, calculate realistic sprint completion
+  const rawGlobalDaysNeeded = Math.ceil(globalRemainingStages / Math.max(1.0, estimatedDailyStages));
+  const examSprintWindow = Math.max(1, minDaysLeft);
+
+  // If user is behind, project realistic date around or slightly after first exam (e.g. within 5-10 days), never months away
+  let effectiveGlobalDaysNeeded = rawGlobalDaysNeeded;
+  if (rawGlobalDaysNeeded > examSprintWindow) {
+    const delay = Math.min(8, Math.ceil((rawGlobalDaysNeeded - examSprintWindow) * 0.25));
+    effectiveGlobalDaysNeeded = examSprintWindow + delay;
+  } else {
+    effectiveGlobalDaysNeeded = Math.max(3, rawGlobalDaysNeeded);
+  }
+
+  const globalPredictedDate = new Date(now.getTime() + effectiveGlobalDaysNeeded * 24 * 60 * 60 * 1000);
   const globalDateStr = formatDateIndian(globalPredictedDate.toISOString().split('T')[0]);
 
-  // Overall status based on nearest exam
+  // Overall status based on nearest board exam
   let globalStatus: 'on-track' | 'tight' | 'behind' = 'on-track';
-  const nearestDiff = minDaysLeft - globalDaysNeeded;
-  if (nearestDiff >= 10) globalStatus = 'on-track';
-  else if (nearestDiff >= 0) globalStatus = 'tight';
-  else globalStatus = 'behind';
+  const nearestDiff = minDaysLeft - rawGlobalDaysNeeded;
+  if (nearestDiff >= 6) {
+    globalStatus = 'on-track';
+  } else if (nearestDiff >= 0) {
+    globalStatus = 'tight';
+  } else {
+    globalStatus = 'behind';
+  }
 
   return {
     totalChapters: globalTotalChapters,
     totalStages: globalTotalStages,
-    completedStages: globalCompletedStages,
+    completedStages: roundedGlobalCompleted,
     remainingStages: globalRemainingStages,
     overallPercent: globalPercent,
     dailyVelocityStages: estimatedDailyStages,

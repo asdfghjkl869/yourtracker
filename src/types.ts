@@ -31,7 +31,9 @@ export interface StudySession {
   chapterName?: string;
   durationMinutes: number;
   timestamp: string; // ISO string
+  date?: string; // YYYY-MM-DD
   notes?: string;
+  qualityRating?: number;
 }
 
 export interface SubjectHabit {

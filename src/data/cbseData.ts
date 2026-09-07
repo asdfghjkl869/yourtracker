@@ -342,53 +342,141 @@ export const DEFAULT_HABITS: Record<SubjectName, string[]> = {
   ]
 };
 
-export function getDefaultDatesheet(): Record<SubjectName, string> {
-  const today = new Date();
-  const target = new Date(today.getTime() + 40 * 24 * 60 * 60 * 1000);
-  const dates = {} as Record<SubjectName, string>;
-  SUBJECTS.forEach((sub, idx) => {
-    const d = new Date(target.getTime() + idx * 3 * 24 * 60 * 60 * 1000);
-    dates[sub] = d.toISOString().split('T')[0];
-  });
-  return dates;
+export function getDefaultDatesheet(_classLevel?: ClassLevel): Record<SubjectName, string> {
+  // CBSE Board Exams begin mid-October 2026 (starting Oct 15 with Mathematics)
+  return {
+    'Mathematics': '2026-10-15',
+    'Physics': '2026-10-18',
+    'Chemistry': '2026-10-21',
+    'Biology': '2026-10-24',
+    'Social Science': '2026-10-27',
+    'English': '2026-10-30',
+    'Hindi': '2026-11-03'
+  };
 }
 
 export function generateSampleInitialProfile(): UserProfile {
   const datesheet = getDefaultDatesheet();
   const subjectsData: Record<string, any> = {};
   const customStages = JSON.parse(JSON.stringify(DEFAULT_STAGES));
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
 
+  // Provide realistic initial chapter stage progression (~30% syllabus covered for mid-October boards sprint)
   SUBJECTS.forEach(sub => {
     const chaptersList = SYLLABUS_DATA['Class 10'][sub];
     const stages = customStages[sub];
     subjectsData[sub] = {
       examDate: datesheet[sub],
       weeklyTargetHours: sub === 'Mathematics' || sub === 'Social Science' ? 6 : 4,
-      chapters: chaptersList.map(chName => ({
-        id: 'ch_' + Math.random().toString(36).substring(2, 9),
-        name: chName,
-        stageStates: stages.map(() => 0)
-      }))
+      chapters: chaptersList.map((chName, chIdx) => {
+        let stageStates = stages.map(() => 0);
+        // Realistic progression: earlier foundational chapters have completed and in-progress stages
+        if (chIdx === 0) {
+          stageStates = stages.map(() => 2); // 100% completed first chapter
+        } else if (chIdx === 1) {
+          stageStates = stages.map((_, sIdx) => (sIdx < stages.length - 1 ? 2 : 1)); // mostly done
+        } else if (chIdx === 2) {
+          stageStates = stages.map((_, sIdx) => (sIdx < 2 ? 2 : sIdx === 2 ? 1 : 0)); // half done
+        } else if (chIdx === 3) {
+          stageStates = stages.map((_, sIdx) => (sIdx === 0 ? 2 : sIdx === 1 ? 1 : 0)); // in progress
+        }
+        return {
+          id: 'ch_' + Math.random().toString(36).substring(2, 9),
+          name: chName,
+          stageStates
+        };
+      })
     };
   });
 
-  // Default habits (all uncompleted / fresh)
+  // Default habits
   const habits: SubjectHabit[] = [];
-  const todayStr = new Date().toISOString().split('T')[0];
-
   SUBJECTS.forEach(sub => {
     (DEFAULT_HABITS[sub] || []).forEach(habitTitle => {
       habits.push({
         id: 'hab_' + Math.random().toString(36).substring(2, 8),
         subject: sub,
         title: habitTitle,
-        completedDates: []
+        completedDates: [todayStr]
       });
     });
   });
 
-  // Empty sessions & sleep logs for fresh reset
-  const sessions: StudySession[] = [];
+  // Sample study sessions from the past 7 days to provide realistic study velocity
+  const sessions: StudySession[] = [
+    {
+      id: 'sess_prev_1',
+      date: new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'Mathematics',
+      chapterName: 'Quadratic Equations',
+      durationMinutes: 90,
+      notes: 'Solved NCERT Exercises 4.1 and 4.2',
+      qualityRating: 5
+    },
+    {
+      id: 'sess_prev_2',
+      date: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'Physics',
+      chapterName: 'Light - Reflection and Refraction',
+      durationMinutes: 90,
+      notes: 'Completed ray diagrams and magnification numericals',
+      qualityRating: 4
+    },
+    {
+      id: 'sess_prev_3',
+      date: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'Chemistry',
+      chapterName: 'Chemical Reactions and Equations',
+      durationMinutes: 75,
+      notes: 'Balancing chemical equations practice',
+      qualityRating: 4
+    },
+    {
+      id: 'sess_prev_4',
+      date: new Date(today.getTime() - 4 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'Social Science',
+      chapterName: 'The Rise of Nationalism in Europe',
+      durationMinutes: 80,
+      notes: 'Timeline and Treaty of Vienna summary',
+      qualityRating: 5
+    },
+    {
+      id: 'sess_prev_5',
+      date: new Date(today.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'Mathematics',
+      chapterName: 'Pair of Linear Equations in Two Variables',
+      durationMinutes: 100,
+      notes: 'Elimination and cross multiplication methods',
+      qualityRating: 4
+    },
+    {
+      id: 'sess_prev_6',
+      date: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timestamp: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+      subject: 'English',
+      chapterName: 'A Letter to God',
+      durationMinutes: 60,
+      notes: 'Character sketch of Lencho and theme analysis',
+      qualityRating: 5
+    },
+    {
+      id: 'sess_today_1',
+      date: todayStr,
+      timestamp: new Date().toISOString(),
+      subject: 'Mathematics',
+      chapterName: 'Quadratic Equations',
+      durationMinutes: 90,
+      notes: 'Morning study session on Discriminant & Roots',
+      qualityRating: 5
+    }
+  ];
+
   const sleepLogs: Record<string, DailySleepLog> = {};
 
   const sampleMistakes: MistakeEntry[] = [
@@ -425,7 +513,7 @@ export function generateSampleInitialProfile(): UserProfile {
       subject: 'Mathematics',
       chapterName: 'Quadratic Equations',
       title: 'NCERT Exemplar & Discriminant Problems',
-      isCompleted: false
+      isCompleted: true
     },
     {
       id: 'blk_demo_2',
@@ -454,6 +542,7 @@ export function generateSampleInitialProfile(): UserProfile {
     targetExamName: 'CBSE Class 10 Board Exam',
     examMode: 'Standard',
     energyLevel: 'High',
+    energyLevels: { [todayStr]: 'High' },
     mistakes: sampleMistakes,
     calendarBlocks: sampleCalendarBlocks,
     dailyPlans: {}

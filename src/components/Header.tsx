@@ -24,7 +24,9 @@ interface HeaderProps {
   onToggleTheme: () => void;
   onTabChange: (tab: TabType) => void;
   onOpenEnergyModal?: () => void;
+  onOpenEnergyCheckin?: () => void;
   onExamModeChange?: (mode: ExamMode) => void;
+  onToggleExamMode?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,7 +38,9 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleTheme,
   onTabChange,
   onOpenEnergyModal,
-  onExamModeChange
+  onOpenEnergyCheckin,
+  onExamModeChange,
+  onToggleExamMode
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [examModeDropdownOpen, setExamModeDropdownOpen] = useState(false);
@@ -44,7 +48,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   const todayStr = new Date().toISOString().split('T')[0];
   const currentEnergy: EnergyLevel =
-    (activeProfile?.energyLevels && activeProfile.energyLevels[todayStr]) || 'Medium';
+    activeProfile?.energyLevel ||
+    (activeProfile?.energyLevels && activeProfile.energyLevels[todayStr]) ||
+    'Medium';
   const currentExamMode: ExamMode = activeProfile?.examMode || 'Final Boards';
 
   useEffect(() => {
@@ -94,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2 sm:gap-2.5">
           {/* Daily Energy Level Badge */}
           <button
-            onClick={onOpenEnergyModal}
+            onClick={onOpenEnergyCheckin || onOpenEnergyModal}
             className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-all ${
               currentEnergy === 'High'
                 ? 'border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
@@ -108,6 +114,7 @@ export const Header: React.FC<HeaderProps> = ({
             {currentEnergy === 'Low' && <Battery className="h-3.5 w-3.5 text-emerald-400" />}
             {currentEnergy === 'Medium' && <BatteryCharging className="h-3.5 w-3.5 text-sky-400" />}
             <span className="hidden sm:inline">{currentEnergy} Energy</span>
+            <span className="sm:hidden">{currentEnergy}</span>
           </button>
 
           {/* Exam Mode Dropdown */}

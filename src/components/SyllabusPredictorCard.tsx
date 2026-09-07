@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserProfile, SubjectName } from '../types';
 import { calculateSyllabusPrediction, SubjectPrediction } from '../utils/syllabusPredictor';
 import { SUBJECTS, SUBJECT_COLORS } from '../data/cbseData';
+import { formatDateIndian } from '../utils/helpers';
 import {
   TrendingUp,
   Clock,
@@ -146,7 +147,7 @@ export const SyllabusPredictorCard: React.FC<SyllabusPredictorCardProps> = ({
                   </div>
 
                   <div className="text-[10px] text-[#8b949e]">
-                    Exam Date: {p.examDate ? p.examDate : 'Not set'} ({p.daysLeft}d left)
+                    Exam Date: {p.examDate ? formatDateIndian(p.examDate) : 'Not set'} ({p.daysLeft}d left)
                   </div>
 
                   <div className="mt-2 flex items-center justify-between text-[10px]">
