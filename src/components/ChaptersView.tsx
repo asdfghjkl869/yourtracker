@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserProfile, SubjectName, ChapterDifficulty, Chapter } from '../types';
 import { SUBJECTS, DEFAULT_STAGES, SYLLABUS_DATA } from '../data/cbseData';
 import { calculateChapterPriorityScore, getChapterMistakesCount } from '../utils/prioritizer';
+import { getLocalDateString } from '../utils/helpers';
 import {
   ChevronDown,
   ChevronRight,
@@ -102,7 +103,7 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
   const [scheduleTimeSlot, setScheduleTimeSlot] = useState<string>('15:00');
   const [scheduleDuration, setScheduleDuration] = useState<number>(60);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString(new Date());
   const todayDailyPlan = profile.dailyPlans?.[todayStr];
   const todayTasks = todayDailyPlan?.tasks || [];
   const calendarBlocks = profile.calendarBlocks || [];
@@ -128,7 +129,7 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
   const upcomingDays = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(d);
     const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' });
     const dateFormatted = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return { offset: i, dateStr, dayName, dateFormatted };
@@ -525,14 +526,14 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={(e) => handleAddNextStageToToday(e, ch)}
-                      className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-[#58a6ff]/30 bg-[#58a6ff]/10 px-2 py-1 text-[10px] font-bold text-[#58a6ff] hover:bg-[#58a6ff]/20 transition-colors"
-                      title="Add next pending stage of this chapter directly to Today's Plan"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#58a6ff]/40 bg-[#58a6ff]/15 px-2.5 py-1 text-xs font-semibold text-[#58a6ff] hover:bg-[#58a6ff]/25 hover:border-[#58a6ff]/70 active:scale-95 transition-all shadow-sm shadow-[#58a6ff]/10 cursor-pointer"
+                      title="Add next pending stage of this chapter to Today's Plan & open in Planner"
                     >
-                      <Zap className="h-3 w-3" />
+                      <Zap className="h-3.5 w-3.5 fill-[#58a6ff]/30 text-[#58a6ff]" />
                       <span>+ Today</span>
                     </button>
 
@@ -549,10 +550,10 @@ export const ChaptersView: React.FC<ChaptersViewProps> = ({
                           stageIdx: targetIdx
                         });
                       }}
-                      className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500/20 transition-colors"
-                      title="Schedule this chapter into Weekly Calendar"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/40 bg-purple-500/15 px-2.5 py-1 text-xs font-semibold text-purple-300 hover:bg-purple-500/25 hover:border-purple-400/70 active:scale-95 transition-all shadow-sm shadow-purple-500/10 cursor-pointer"
+                      title="Schedule this chapter into Weekly Calendar & Planner"
                     >
-                      <Calendar className="h-3 w-3" />
+                      <Calendar className="h-3.5 w-3.5 text-purple-300" />
                       <span>+ Weekly</span>
                     </button>
 

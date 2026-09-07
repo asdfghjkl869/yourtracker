@@ -33,7 +33,7 @@ import { EnergyCheckinModal } from './components/EnergyCheckinModal';
 import { PanicModeBanner } from './components/PanicModeBanner';
 import { SyllabusPredictorCard } from './components/SyllabusPredictorCard';
 import { DailyStudyChart } from './components/DailyStudyChart';
-import { getDaysRemaining } from './utils/helpers';
+import { getDaysRemaining, getLocalDateString } from './utils/helpers';
 import {
   Sparkles,
   Play,
@@ -64,6 +64,8 @@ export default function App() {
   const [targetSubjectForSession, setTargetSubjectForSession] = useState<SubjectName>('Mathematics');
   const [targetSubjectForMistakes, setTargetSubjectForMistakes] = useState<SubjectName>('Mathematics');
   const [targetChapterForMistakes, setTargetChapterForMistakes] = useState<string>('');
+  const [plannerTargetDate, setPlannerTargetDate] = useState<string | undefined>(undefined);
+  const [highlightedBlockId, setHighlightedBlockId] = useState<string | undefined>(undefined);
 
   // Feature Modals & Alerts
   const [showDailyPlanModal, setShowDailyPlanModal] = useState<boolean>(false);
@@ -757,7 +759,7 @@ export default function App() {
 
   const handleToggleDailyTask = (taskId: string) => {
     if (!activeProfile) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString(new Date());
     const plan = activeProfile.dailyPlans?.[today];
     if (!plan) return;
 
@@ -830,7 +832,7 @@ export default function App() {
 
   const handleSyncPlanToCalendar = (tasks: DailyTask[]) => {
     if (!activeProfile) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString(new Date());
     let startHour = 9;
 
     const newBlocks: CalendarBlock[] = tasks.map(t => {
@@ -872,10 +874,11 @@ export default function App() {
     chapterName: string,
     stageName: string,
     stageIdx: number,
-    durationMinutes = 45
+    durationMinutes = 45,
+    openInPlanner = true
   ) => {
     if (!activeProfile) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString(new Date());
     const existingPlan = activeProfile.dailyPlans?.[today];
     const existingTasks = existingPlan?.tasks || [];
 
@@ -886,31 +889,77 @@ export default function App() {
         (t.stageIndex === stageIdx || t.stageName === stageName)
     );
 
-    if (isAlreadyAdded) {
-      showNotification(`"${stageName} — ${chapterName}" is already in Today's Plan! 🎯`);
-      return;
+    let taskId = 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    let updatedTasks = existingTasks;
+
+    if (!isAlreadyAdded) {
+      const newTask: DailyTask = {
+        id: taskId,
+        subject,
+        chapterId,
+        chapterName,
+        stageName,
+        stageIndex: stageIdx,
+        title: `${stageName} — ${chapterName}`,
+        taskTitle: `${stageName} — ${chapterName}`,
+        estimatedMinutes: durationMinutes,
+        completed: false,
+        isCompleted: false,
+        reasonTag: 'Added from Syllabus',
+        reason: `Direct syllabus focus on ${stageName}`,
+        scheduledTime: '16:00'
+      };
+      updatedTasks = [...existingTasks, newTask];
     }
 
-    const newTask: DailyTask = {
-      id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      subject,
-      chapterId,
-      chapterName,
-      stageName,
-      stageIndex: stageIdx,
-      title: `${stageName} — ${chapterName}`,
-      taskTitle: `${stageName} — ${chapterName}`,
-      estimatedMinutes: durationMinutes,
-      completed: false,
-      isCompleted: false,
-      reasonTag: 'Added from Syllabus',
-      reason: `Direct syllabus focus on ${stageName}`,
-      scheduledTime: '16:00'
-    };
+    // Auto-create a CalendarBlock for today in the Time Blocking Calendar if not already present
+    const existingBlocks = activeProfile.calendarBlocks || [];
+    const matchedBlock = existingBlocks.find(
+      b =>
+        b.date === today &&
+        b.subject === subject &&
+        (b.chapterId === chapterId || b.chapterName === chapterName) &&
+        (b.stageIndex === stageIdx || b.stageName === stageName)
+    );
 
-    const updatedTasks = [...existingTasks, newTask];
+    let blockId = matchedBlock
+      ? matchedBlock.id
+      : 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    let newBlocks = existingBlocks;
+
+    if (!matchedBlock) {
+      const plannedHours = new Set(
+        existingBlocks
+          .filter(b => b.date === today)
+          .map(b => parseInt(b.startTime.split(':')[0], 10))
+      );
+      let targetHour = 16;
+      for (const h of [16, 17, 18, 19, 10, 11, 14, 15, 20]) {
+        if (!plannedHours.has(h)) {
+          targetHour = h;
+          break;
+        }
+      }
+      const startHStr = String(targetHour).padStart(2, '0');
+      const endHStr = String(targetHour + 1).padStart(2, '0');
+
+      const newBlock: CalendarBlock = {
+        id: blockId,
+        date: today,
+        startTime: `${startHStr}:00`,
+        endTime: `${endHStr}:00`,
+        subject,
+        chapterId,
+        chapterName,
+        stageName,
+        stageIndex: stageIdx,
+        title: `${stageName} — ${chapterName}`,
+        isCompleted: false
+      };
+      newBlocks = [...existingBlocks, newBlock];
+    }
+
     const totalMins = updatedTasks.reduce((acc, t) => acc + t.estimatedMinutes, 0);
-
     const updatedPlan: DailyPlan = {
       date: today,
       energyLevel: existingPlan?.energyLevel || 'Medium',
@@ -952,14 +1001,22 @@ export default function App() {
             dailyPlans: {
               ...(p.dailyPlans || {}),
               [today]: updatedPlan
-            }
+            },
+            calendarBlocks: newBlocks
           };
         }
         return p;
       })
     );
 
-    showNotification(`Added "${stageName} — ${chapterName}" to Today's Plan! 🎯`);
+    if (openInPlanner) {
+      setPlannerTargetDate(today);
+      setHighlightedBlockId(blockId);
+      setActiveTab('planner');
+      showNotification(`Added "${stageName} — ${chapterName}" to Planner & Today's Plan! 🎯`);
+    } else {
+      showNotification(`Added "${stageName} — ${chapterName}" to Today's Plan! 🎯`);
+    }
   };
 
   const handleAddStageToWeeklyPlan = (
@@ -970,14 +1027,15 @@ export default function App() {
     stageIdx: number,
     targetDateStr?: string,
     startTime = '15:00',
-    durationMinutes = 60
+    durationMinutes = 60,
+    openInPlanner = true
   ) => {
     if (!activeProfile) return;
     let dateStr = targetDateStr;
     if (!dateStr) {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
-      dateStr = tomorrow.toISOString().split('T')[0];
+      dateStr = getLocalDateString(tomorrow);
     }
 
     const [startH, startM] = startTime.split(':').map(Number);
@@ -986,8 +1044,9 @@ export default function App() {
     const endM = totalEndMins % 60;
     const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 
+    const newBlockId = 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     const newBlock: CalendarBlock = {
-      id: 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      id: newBlockId,
       date: dateStr,
       startTime,
       endTime,
@@ -1003,8 +1062,29 @@ export default function App() {
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
+          const subData = p.subjects[subject];
+          let updatedChapters = subData?.chapters;
+          if (subData?.chapters) {
+            updatedChapters = subData.chapters.map(ch => {
+              if (ch.id === chapterId || ch.name === chapterName) {
+                const newStates = [...(ch.stageStates || [])];
+                if ((newStates[stageIdx] || 0) === 0) {
+                  newStates[stageIdx] = 1;
+                }
+                return { ...ch, stageStates: newStates };
+              }
+              return ch;
+            });
+          }
+
           return {
             ...p,
+            subjects: updatedChapters
+              ? {
+                  ...p.subjects,
+                  [subject]: { ...subData, chapters: updatedChapters }
+                }
+              : p.subjects,
             calendarBlocks: [...(p.calendarBlocks || []), newBlock]
           };
         }
@@ -1017,7 +1097,15 @@ export default function App() {
       month: 'short',
       day: 'numeric'
     });
-    showNotification(`Scheduled "${stageName}" on ${formattedDate} (${startTime}) in Weekly Calendar! 📅`);
+
+    if (openInPlanner) {
+      setPlannerTargetDate(dateStr);
+      setHighlightedBlockId(newBlockId);
+      setActiveTab('planner');
+      showNotification(`Scheduled "${stageName}" on ${formattedDate} (${startTime}) in Weekly Planner! 📅`);
+    } else {
+      showNotification(`Scheduled "${stageName}" on ${formattedDate} (${startTime}) in Weekly Calendar! 📅`);
+    }
   };
 
   // --- Handlers for Daily Energy & Exam Mode ---
@@ -1717,11 +1805,14 @@ export default function App() {
         {activeTab === 'planner' && activeProfile && (
           <TimeBlockingCalendar
             profile={activeProfile}
+            initialDateStr={plannerTargetDate}
+            highlightedBlockId={highlightedBlockId}
             onAddBlock={handleAddCalendarBlock}
             onDeleteBlock={handleDeleteCalendarBlock}
             onUpdateBlock={handleUpdateCalendarBlock}
             onAddSession={handleAddSession}
             onOpenDailyPlan={() => setShowDailyPlanModal(true)}
+            onToggleDailyTask={handleToggleDailyTask}
           />
         )}
 

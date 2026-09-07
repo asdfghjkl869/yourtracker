@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { generateDailyPlan } from '../utils/dailyPlanGenerator';
 import { SUBJECTS, SUBJECT_COLORS, DEFAULT_STAGES } from '../data/cbseData';
+import { getLocalDateString } from '../utils/helpers';
 import {
   Sparkles,
   Zap,
@@ -59,7 +60,7 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
   onSyncToCalendar,
   onEnergyChange
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString(new Date());
   const existingPlan = profile.dailyPlans ? profile.dailyPlans[todayStr] : undefined;
   const initialEnergy = (profile.energyLevels && profile.energyLevels[todayStr]) || existingPlan?.energyLevel || 'Medium';
   const initialDiversity: PlanDiversityMode = existingPlan?.diversityMode || 'balanced';
@@ -89,6 +90,16 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
       initialSelectedStages
     ).tasks;
   });
+
+  // Keep tasks synced whenever modal opens or profile dailyPlans updates
+  useEffect(() => {
+    if (isOpen) {
+      const plan = profile.dailyPlans?.[todayStr];
+      if (plan?.tasks && plan.tasks.length > 0) {
+        setTasks(plan.tasks);
+      }
+    }
+  }, [isOpen, profile.dailyPlans, todayStr]);
 
   // Custom task form state
   const [isAddingTask, setIsAddingTask] = useState(false);

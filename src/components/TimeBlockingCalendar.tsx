@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, CalendarBlock, SubjectName, StudySession, DailyTask } from '../types';
 import { SUBJECTS, SUBJECT_COLORS } from '../data/cbseData';
-import { formatDateIndian } from '../utils/helpers';
+import { formatDateIndian, getLocalDateString } from '../utils/helpers';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -15,54 +15,81 @@ import {
   X,
   Play,
   ArrowRight,
-  ListTodo
+  ListTodo,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 
 interface TimeBlockingCalendarProps {
   profile: UserProfile;
+  initialDateStr?: string;
+  highlightedBlockId?: string;
   onAddBlock: (block: Omit<CalendarBlock, 'id'>) => void;
   onDeleteBlock: (id: string) => void;
   onUpdateBlock: (block: CalendarBlock) => void;
   onAddSession: (session: Omit<StudySession, 'id'>) => void;
   onOpenDailyPlan: () => void;
+  onToggleDailyTask?: (taskId: string) => void;
 }
 
 const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 
 export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
   profile,
+  initialDateStr,
+  highlightedBlockId,
   onAddBlock,
   onDeleteBlock,
   onUpdateBlock,
   onAddSession,
-  onOpenDailyPlan
+  onOpenDailyPlan,
+  onToggleDailyTask
 }) => {
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
-  const [currentDate, setCurrentDate] = useState<Date>(new Date());
+  const [currentDate, setCurrentDate] = useState<Date>(() => {
+    if (initialDateStr) {
+      const parts = initialDateStr.split('-').map(Number);
+      if (parts.length === 3) {
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+      }
+    }
+    return new Date();
+  });
 
   // Block Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedDateStr, setSelectedDateStr] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDateStr, setSelectedDateStr] = useState(
+    initialDateStr || getLocalDateString(new Date())
+  );
   const [blockSubject, setBlockSubject] = useState<SubjectName>('Mathematics');
   const [blockChapter, setBlockChapter] = useState('');
   const [blockTitle, setBlockTitle] = useState('');
   const [blockStartTime, setBlockStartTime] = useState('09:00');
   const [blockEndTime, setBlockEndTime] = useState('10:30');
 
-  // Compute Monday of current week
+  useEffect(() => {
+    if (initialDateStr) {
+      const parts = initialDateStr.split('-').map(Number);
+      if (parts.length === 3) {
+        setCurrentDate(new Date(parts[0], parts[1] - 1, parts[2]));
+        setSelectedDateStr(initialDateStr);
+      }
+    }
+  }, [initialDateStr]);
+
+  // Compute Monday of current week (CBSE standard Mon-Sun)
   const getMonday = (d: Date) => {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    date.setDate(diff);
+    const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const day = date.getDay(); // 0 is Sunday, 1 is Monday...
+    const diff = day === 0 ? -6 : 1 - day;
+    date.setDate(date.getDate() + diff);
     date.setHours(0, 0, 0, 0);
     return date;
   };
 
   const monday = getMonday(currentDate);
   const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
+    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
     return d;
   });
 
@@ -78,11 +105,12 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
     setCurrentDate(next);
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const activeDayStr = currentDate.toISOString().split('T')[0];
+  const todayStr = getLocalDateString(new Date());
+  const activeDayStr = getLocalDateString(currentDate);
 
   const calendarBlocks = profile.calendarBlocks || [];
   const sessions = profile.sessions || [];
+  const todayTasks = profile.dailyPlans?.[todayStr]?.tasks || [];
 
   // Filter items for a specific date
   const getBlocksForDate = (dateStr: string) => {
@@ -213,8 +241,8 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
 
           <span className="ml-2 text-xs font-bold text-[#f0f6fc] sm:text-sm">
             {viewMode === 'week'
-              ? `${formatDateIndian(weekDays[0].toISOString().split('T')[0])} — ${formatDateIndian(
-                  weekDays[6].toISOString().split('T')[0]
+              ? `${formatDateIndian(getLocalDateString(weekDays[0]))} — ${formatDateIndian(
+                  getLocalDateString(weekDays[6])
                 )}`
               : formatDateIndian(activeDayStr)}
           </span>
@@ -254,6 +282,97 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
         </div>
       </div>
 
+      {/* Today's Daily Quests / Syllabus Tasks Sync Banner */}
+      {todayTasks.length > 0 && (
+        <div className="rounded-2xl border border-sky-500/20 bg-gradient-to-r from-sky-500/10 via-purple-500/5 to-transparent p-3.5">
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/20 text-xs">
+                🎯
+              </span>
+              <div>
+                <div className="text-xs font-black text-[#f0f6fc] flex items-center gap-2">
+                  <span>Today's Daily Quests ({todayTasks.filter(t => t.completed || t.isCompleted).length}/{todayTasks.length})</span>
+                  <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider">Synced with Syllabus</span>
+                </div>
+                <div className="text-[11px] text-[#8b949e]">
+                  Tasks scheduled from your Chapter Syllabus for today
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={onOpenDailyPlan}
+              className="self-start sm:self-auto inline-flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/15 px-2.5 py-1 text-xs font-bold text-sky-300 hover:bg-sky-500/25"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>Full Daily Plan</span>
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {todayTasks.map(task => {
+              const isDone = !!(task.completed || task.isCompleted);
+              const hasCalendarBlock = calendarBlocks.some(
+                b => b.date === todayStr && (b.title === task.title || (b.chapterName === task.chapterName && b.subject === task.subject))
+              );
+
+              return (
+                <div
+                  key={task.id}
+                  className={`flex items-center justify-between rounded-xl border p-2.5 transition-all ${
+                    isDone
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-white/10 bg-[#0d1117] text-[#f0f6fc]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0 pr-2">
+                    <button
+                      type="button"
+                      onClick={() => onToggleDailyTask?.(task.id)}
+                      className="shrink-0 text-[#8b949e] hover:text-[#58a6ff]"
+                    >
+                      {isDone ? (
+                        <CheckSquare className="h-4 w-4 text-emerald-400" />
+                      ) : (
+                        <Square className="h-4 w-4" />
+                      )}
+                    </button>
+                    <div className="min-w-0">
+                      <div className={`text-xs font-bold truncate ${isDone ? 'line-through text-[#8b949e]' : ''}`}>
+                        {task.taskTitle || task.title}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px] text-[#8b949e]">
+                        <span className="font-semibold text-sky-400">{task.subject}</span>
+                        <span>•</span>
+                        <span>{task.estimatedMinutes}m</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!hasCalendarBlock && !isDone && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBlockSubject(task.subject);
+                        if (task.chapterName) setBlockChapter(task.chapterName);
+                        setBlockTitle(task.title || task.taskTitle || 'Study Session');
+                        setSelectedDateStr(todayStr);
+                        setIsModalOpen(true);
+                      }}
+                      className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-500/15 px-2 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/25"
+                      title="Schedule this quest into a time slot"
+                    >
+                      + Slot
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* WEEKLY VIEW */}
       {viewMode === 'week' && (
         <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#161b22]">
@@ -261,7 +380,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
             {/* Days Header */}
             <div className="grid grid-cols-7 border-b border-white/10 bg-[#0d1117] text-center">
               {weekDays.map(d => {
-                const dStr = d.toISOString().split('T')[0];
+                const dStr = getLocalDateString(d);
                 const isToday = dStr === todayStr;
                 return (
                   <div
@@ -292,7 +411,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
             {/* Days Columns */}
             <div className="grid grid-cols-7 min-h-[480px]">
               {weekDays.map(d => {
-                const dStr = d.toISOString().split('T')[0];
+                const dStr = getLocalDateString(d);
                 const dayBlocks = getBlocksForDate(dStr);
                 const daySessions = getSessionsForDate(dStr);
                 const isToday = dStr === todayStr;
@@ -306,6 +425,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                   >
                     {/* Planned Blocks */}
                     {dayBlocks.map(b => {
+                      const isHighlighted = highlightedBlockId === b.id;
                       const color = SUBJECT_COLORS[b.subject] || {
                         accent: '#38bdf8',
                         bg: 'bg-sky-500/10',
@@ -316,7 +436,9 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                         <div
                           key={b.id}
                           className={`relative rounded-xl border p-2.5 transition-all text-left group ${
-                            b.isCompleted
+                            isHighlighted
+                              ? 'ring-2 ring-[#58a6ff] bg-[#58a6ff]/20 animate-pulse border-[#58a6ff] shadow-lg shadow-[#58a6ff]/30'
+                              : b.isCompleted
                               ? 'border-emerald-500/40 bg-emerald-500/15'
                               : 'border-white/10 bg-[#0d1117] hover:border-white/20'
                           }`}
@@ -326,7 +448,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                           }}
                         >
                           <div className="flex items-center justify-between text-[10px] text-[#8b949e]">
-                            <span>
+                            <span className="font-semibold">
                               {b.startTime} - {b.endTime}
                             </span>
                             <button
@@ -334,7 +456,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                                 e.stopPropagation();
                                 onDeleteBlock(b.id);
                               }}
-                              className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-rose-400"
+                              className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-rose-400 transition-opacity"
                               title="Delete block"
                             >
                               <Trash2 className="h-3 w-3" />
@@ -577,24 +699,37 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
             </div>
 
             <form onSubmit={handleSaveBlock} className="space-y-3">
-              <div>
-                <label className="text-[10px] font-bold uppercase text-[#8b949e]">Subject</label>
-                <select
-                  value={blockSubject}
-                  onChange={e => {
-                    const s = e.target.value as SubjectName;
-                    setBlockSubject(s);
-                    const chs = profile.subjects[s]?.chapters || [];
-                    if (chs[0]) setBlockChapter(chs[0].name);
-                  }}
-                  className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] p-2 text-xs text-[#f0f6fc]"
-                >
-                  {SUBJECTS.map(s => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[#8b949e]">Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={selectedDateStr}
+                    onChange={e => setSelectedDateStr(e.target.value)}
+                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[#8b949e]">Subject</label>
+                  <select
+                    value={blockSubject}
+                    onChange={e => {
+                      const s = e.target.value as SubjectName;
+                      setBlockSubject(s);
+                      const chs = profile.subjects[s]?.chapters || [];
+                      if (chs[0]) setBlockChapter(chs[0].name);
+                    }}
+                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
+                  >
+                    {SUBJECTS.map(s => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -602,7 +737,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                 <select
                   value={blockChapter}
                   onChange={e => setBlockChapter(e.target.value)}
-                  className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] p-2 text-xs text-[#f0f6fc]"
+                  className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
                 >
                   {(profile.subjects[blockSubject]?.chapters || []).map(c => (
                     <option key={c.id} value={c.name}>
@@ -621,7 +756,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                   placeholder="e.g. Solve Trigonometry ML Agarwal HOTS (1-10)"
                   value={blockTitle}
                   onChange={e => setBlockTitle(e.target.value)}
-                  className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] p-2 text-xs text-[#f0f6fc]"
+                  className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
                 />
               </div>
 
@@ -633,7 +768,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                     required
                     value={blockStartTime}
                     onChange={e => setBlockStartTime(e.target.value)}
-                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] p-2 text-xs text-[#f0f6fc]"
+                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
                   />
                 </div>
                 <div>
@@ -643,7 +778,7 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                     required
                     value={blockEndTime}
                     onChange={e => setBlockEndTime(e.target.value)}
-                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] p-2 text-xs text-[#f0f6fc]"
+                    className="w-full mt-1 rounded-xl border border-white/10 bg-[#161b22] px-3 py-2 text-xs font-semibold text-[#f0f6fc] outline-none focus:border-[#58a6ff]"
                   />
                 </div>
               </div>
