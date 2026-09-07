@@ -52,6 +52,8 @@ export interface DailySleepLog {
 
 export type EnergyLevel = 'Low' | 'Medium' | 'High';
 
+export type PlanDiversityMode = 'balanced' | 'dual' | 'focus';
+
 export type ExamMode = 'Standard' | 'Exam Mode' | 'Panic Mode' | 'Mid-terms' | 'Pre-boards' | 'Final Boards';
 
 export type MistakeReason =
@@ -101,6 +103,8 @@ export interface DailyTask {
 export interface DailyPlan {
   date: string; // YYYY-MM-DD
   energyLevel: EnergyLevel;
+  diversityMode?: PlanDiversityMode;
+  focusSubject?: SubjectName;
   tasks: DailyTask[];
   generatedAt: string;
   targetTotalMinutes: number;

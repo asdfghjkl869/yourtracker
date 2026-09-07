@@ -652,14 +652,15 @@ export default function App() {
     const plan = activeProfile.dailyPlans?.[today];
     if (!plan) return;
 
+    let isNowDone = false;
     const updatedTasks = plan.tasks.map(t => {
       if (t.id === taskId) {
-        return { ...t, isCompleted: !t.isCompleted };
+        const nextVal = !(t.isCompleted ?? t.completed);
+        isNowDone = nextVal;
+        return { ...t, isCompleted: nextVal, completed: nextVal };
       }
       return t;
     });
-
-    const isNowDone = updatedTasks.find(t => t.id === taskId)?.isCompleted;
 
     setProfiles(prev =>
       prev.map(p => {
@@ -896,7 +897,7 @@ export default function App() {
     showNotification(`Set ${subject} chapter to ${diff} difficulty!`);
   };
 
-  // Smart Focus items for Today's Focus box (as in screenshots)
+  // Smart Focus items for Today's Focus box (balanced across subjects)
   const getSmartFocusItems = () => {
     if (!activeProfile) return [];
     const items: {
@@ -907,13 +908,17 @@ export default function App() {
       stageIdx: number;
       isProgress: boolean;
     }[] = [];
+    const selectedSubjects = new Set<SubjectName>();
 
-    // Prioritize In-Progress stages
+    // Pass 1: In-Progress stages (max 1 per subject for variety)
     for (const sub of SUBJECTS) {
+      if (items.length >= 3) break;
+      if (selectedSubjects.has(sub)) continue;
       const subData = activeProfile.subjects[sub];
       if (!subData) continue;
       const stages = activeProfile.customStages[sub] || DEFAULT_STAGES[sub];
       for (const ch of subData.chapters) {
+        let found = false;
         for (let sIdx = 0; sIdx < stages.length; sIdx++) {
           if (ch.stageStates[sIdx] === 1) {
             items.push({
@@ -924,18 +929,24 @@ export default function App() {
               stageIdx: sIdx,
               isProgress: true
             });
-            if (items.length >= 3) return items;
+            selectedSubjects.add(sub);
+            found = true;
+            break;
           }
         }
+        if (found) break;
       }
     }
 
-    // Then Pending stages
+    // Pass 2: Pending stages across other subjects (max 1 per subject)
     for (const sub of SUBJECTS) {
+      if (items.length >= 3) break;
+      if (selectedSubjects.has(sub)) continue;
       const subData = activeProfile.subjects[sub];
       if (!subData) continue;
       const stages = activeProfile.customStages[sub] || DEFAULT_STAGES[sub];
       for (const ch of subData.chapters) {
+        let found = false;
         for (let sIdx = 0; sIdx < stages.length; sIdx++) {
           if (ch.stageStates[sIdx] === 0) {
             items.push({
@@ -946,7 +957,39 @@ export default function App() {
               stageIdx: sIdx,
               isProgress: false
             });
-            if (items.length >= 3) return items;
+            selectedSubjects.add(sub);
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+    }
+
+    // Pass 3: If still < 3, allow additional items from any subjects
+    if (items.length < 3) {
+      for (const sub of SUBJECTS) {
+        if (items.length >= 3) break;
+        const subData = activeProfile.subjects[sub];
+        if (!subData) continue;
+        const stages = activeProfile.customStages[sub] || DEFAULT_STAGES[sub];
+        for (const ch of subData.chapters) {
+          if (items.length >= 3) break;
+          for (let sIdx = 0; sIdx < stages.length; sIdx++) {
+            if (ch.stageStates[sIdx] !== 2) {
+              const alreadyHas = items.some(it => it.chapterId === ch.id && it.stageIdx === sIdx);
+              if (!alreadyHas) {
+                items.push({
+                  subject: sub,
+                  chapterName: ch.name,
+                  stageName: stages[sIdx],
+                  chapterId: ch.id,
+                  stageIdx: sIdx,
+                  isProgress: ch.stageStates[sIdx] === 1
+                });
+                break;
+              }
+            }
           }
         }
       }
@@ -1120,35 +1163,38 @@ export default function App() {
                   {/* Tasks List */}
                   {todayDailyPlan && todayDailyPlan.tasks.length > 0 ? (
                     <div className="space-y-2">
-                      {todayDailyPlan.tasks.map(task => (
-                        <div
-                          key={task.id}
-                          onClick={() => handleToggleDailyTask(task.id)}
-                          className={`habit-item cursor-pointer ${task.isCompleted ? 'done' : ''}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={task.isCompleted}
-                            onChange={() => {}}
-                            className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
-                          />
-                          <div className="flex-grow min-w-0">
-                            <div className="text-xs font-bold text-[#f0f6fc] truncate">
-                              {task.subject} • {task.title}
-                            </div>
-                            <div className="text-[11px] text-[#8b949e] truncate">
-                              {task.estimatedMinutes} mins • {task.reason}
-                            </div>
-                          </div>
-                          <span
-                            className={`text-[10px] font-bold shrink-0 ${
-                              task.isCompleted ? 'text-[#3fb950]' : 'text-[#8b949e]'
-                            }`}
+                      {todayDailyPlan.tasks.map(task => {
+                        const isDone = task.isCompleted ?? task.completed ?? false;
+                        return (
+                          <div
+                            key={task.id}
+                            onClick={() => handleToggleDailyTask(task.id)}
+                            className={`habit-item cursor-pointer ${isDone ? 'done' : ''}`}
                           >
-                            {task.isCompleted ? '+25 XP' : `${task.estimatedMinutes}m`}
-                          </span>
-                        </div>
-                      ))}
+                            <input
+                              type="checkbox"
+                              checked={isDone}
+                              onChange={() => {}}
+                              className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
+                            />
+                            <div className="flex-grow min-w-0">
+                              <div className="text-xs font-bold text-[#f0f6fc] truncate">
+                                {task.subject} • {task.title || task.taskTitle}
+                              </div>
+                              <div className="text-[11px] text-[#8b949e] truncate">
+                                {task.estimatedMinutes} mins • {task.reasonTag || task.reason || 'CBSE Target'}
+                              </div>
+                            </div>
+                            <span
+                              className={`text-[10px] font-bold shrink-0 ${
+                                isDone ? 'text-[#3fb950]' : 'text-[#8b949e]'
+                              }`}
+                            >
+                              {isDone ? '+25 XP' : `${task.estimatedMinutes}m`}
+                            </span>
+                          </div>
+                        );
+                      })}
 
                       {/* Sync to Calendar button if tasks exist */}
                       <button
