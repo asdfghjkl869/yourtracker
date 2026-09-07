@@ -807,9 +807,10 @@ export const DailyPlanModal: React.FC<DailyPlanModalProps> = ({
                     </div>
 
                     <p
-                      className={`text-xs sm:text-sm font-semibold text-[#f0f6fc] leading-snug ${
+                      className={`text-xs font-medium text-[#f0f6fc] leading-snug line-clamp-2 break-words ${
                         isDone ? 'line-through text-[#8b949e]' : ''
                       }`}
+                      title={task.title || task.taskTitle}
                     >
                       {task.title || task.taskTitle}
                     </p>

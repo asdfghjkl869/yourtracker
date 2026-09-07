@@ -14,7 +14,7 @@ import {
   ExamMode,
   ChapterDifficulty
 } from './types';
-import { SUBJECTS, generateSampleInitialProfile, DEFAULT_STAGES, SYLLABUS_DATA } from './data/cbseData';
+import { SUBJECTS, generateSampleInitialProfile, DEFAULT_STAGES, SYLLABUS_DATA, SUBJECT_COLORS } from './data/cbseData';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { ExamDayTracker } from './components/ExamDayTracker';
@@ -739,6 +739,70 @@ export default function App() {
   // --- Handlers for Daily Plan Generator & Daily Quest ---
   const handleSaveDailyPlan = (plan: DailyPlan) => {
     if (!activeProfile) return;
+    const dateStr = plan.date;
+    const existingBlocks = activeProfile.calendarBlocks || [];
+
+    const occupiedHours = new Set(
+      existingBlocks
+        .filter(b => b.date === dateStr)
+        .map(b => parseInt(b.startTime.split(':')[0], 10))
+    );
+
+    const candidateHours = [9, 11, 13, 15, 17, 19, 20, 10, 14, 16, 18, 21];
+    let candidateIdx = 0;
+    const updatedBlocks = [...existingBlocks];
+
+    plan.tasks.forEach(t => {
+      const taskDone = !!(t.isCompleted ?? t.completed);
+      const existingIdx = updatedBlocks.findIndex(
+        b =>
+          b.date === dateStr &&
+          (b.id === t.id ||
+            b.id === `blk_${t.id}` ||
+            (b.subject === t.subject &&
+              ((t.chapterId && b.chapterId === t.chapterId) ||
+                (t.chapterName && b.chapterName === t.chapterName) ||
+                b.title === (t.title || t.taskTitle))))
+      );
+
+      if (existingIdx >= 0) {
+        updatedBlocks[existingIdx] = {
+          ...updatedBlocks[existingIdx],
+          isCompleted: taskDone,
+          title: t.title || t.taskTitle || updatedBlocks[existingIdx].title
+        };
+      } else {
+        while (candidateIdx < candidateHours.length && occupiedHours.has(candidateHours[candidateIdx])) {
+          candidateIdx++;
+        }
+        const hour = candidateIdx < candidateHours.length ? candidateHours[candidateIdx] : 9 + ((candidateIdx * 2) % 12);
+        candidateIdx++;
+        occupiedHours.add(hour);
+
+        const durationMins = t.estimatedMinutes || 45;
+        const sh = String(hour).padStart(2, '0');
+        const totalEndMins = hour * 60 + durationMins;
+        const endH = Math.floor(totalEndMins / 60);
+        const endM = totalEndMins % 60;
+        const eh = String(endH).padStart(2, '0');
+        const em = String(endM).padStart(2, '0');
+
+        updatedBlocks.push({
+          id: t.id ? `blk_${t.id}` : 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          date: dateStr,
+          startTime: `${sh}:00`,
+          endTime: `${eh}:${em}`,
+          subject: t.subject,
+          chapterId: t.chapterId,
+          chapterName: t.chapterName,
+          stageName: t.stageName,
+          stageIndex: t.stageIndex,
+          title: t.title || t.taskTitle || 'Study Task',
+          isCompleted: taskDone
+        });
+      }
+    });
+
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
@@ -747,14 +811,15 @@ export default function App() {
             dailyPlans: {
               ...(p.dailyPlans || {}),
               [plan.date]: plan
-            }
+            },
+            calendarBlocks: updatedBlocks
           };
         }
         return p;
       })
     );
     setShowDailyPlanModal(false);
-    showNotification("Today's study plan saved and synced to Daily Quest! 🎯");
+    showNotification("Today's study plan saved and auto-synced with Calendar! 🎯📅");
   };
 
   const handleToggleDailyTask = (taskId: string) => {
@@ -809,6 +874,24 @@ export default function App() {
             }
           }
 
+          // Two-way sync: Also sync completion status to matching Calendar Blocks for today
+          const updatedCalendarBlocks = (p.calendarBlocks || []).map(b => {
+            if (b.date === today) {
+              const matchesId = b.id === taskId || b.id === `blk_${taskId}`;
+              const matchesTask =
+                (b.title === (toggledTask?.title || toggledTask?.taskTitle)) ||
+                (toggledTask?.chapterName &&
+                  b.chapterName === toggledTask.chapterName &&
+                  b.subject === toggledTask.subject &&
+                  (b.stageIndex === toggledTask.stageIndex || b.stageName === toggledTask.stageName));
+
+              if (matchesId || matchesTask) {
+                return { ...b, isCompleted: isNowDone };
+              }
+            }
+            return b;
+          });
+
           return {
             ...p,
             subjects: updatedSubjects,
@@ -818,7 +901,8 @@ export default function App() {
                 ...plan,
                 tasks: updatedTasks
               }
-            }
+            },
+            calendarBlocks: updatedCalendarBlocks
           };
         }
         return p;
@@ -826,32 +910,76 @@ export default function App() {
     );
 
     if (isNowDone) {
-      showNotification('Quest task completed! +25 XP 🌟');
+      showNotification('Quest task completed & synced with Calendar! +25 XP 🌟');
     }
   };
 
-  const handleSyncPlanToCalendar = (tasks: DailyTask[]) => {
+  const handleSyncPlanToCalendar = (tasks: DailyTask[], targetDate?: string) => {
     if (!activeProfile) return;
-    const today = getLocalDateString(new Date());
-    let startHour = 9;
+    const dateStr = targetDate || getLocalDateString(new Date());
+    const existingBlocks = activeProfile.calendarBlocks || [];
 
-    const newBlocks: CalendarBlock[] = tasks.map(t => {
-      const sh = String(startHour).padStart(2, '0');
-      const eh = String(startHour + 1).padStart(2, '0');
-      startHour = (startHour + 2) % 23;
-      return {
-        id: 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        date: today,
-        startTime: `${sh}:00`,
-        endTime: `${eh}:30`,
-        subject: t.subject,
-        chapterId: t.chapterId,
-        chapterName: t.chapterName,
-        stageName: t.stageName,
-        stageIndex: t.stageIndex,
-        title: t.title || t.taskTitle || 'Study Task',
-        isCompleted: t.isCompleted ?? t.completed ?? false
-      };
+    const occupiedHours = new Set(
+      existingBlocks
+        .filter(b => b.date === dateStr)
+        .map(b => parseInt(b.startTime.split(':')[0], 10))
+    );
+
+    const candidateHours = [9, 11, 13, 15, 17, 19, 20, 10, 14, 16, 18, 21];
+    let candidateIdx = 0;
+    const updatedBlocks = [...existingBlocks];
+    let addedCount = 0;
+
+    tasks.forEach(t => {
+      const taskDone = !!(t.isCompleted ?? t.completed);
+      const existingIdx = updatedBlocks.findIndex(
+        b =>
+          b.date === dateStr &&
+          (b.id === t.id ||
+            b.id === `blk_${t.id}` ||
+            (b.subject === t.subject &&
+              ((t.chapterId && b.chapterId === t.chapterId) ||
+                (t.chapterName && b.chapterName === t.chapterName) ||
+                b.title === (t.title || t.taskTitle))))
+      );
+
+      if (existingIdx >= 0) {
+        updatedBlocks[existingIdx] = {
+          ...updatedBlocks[existingIdx],
+          isCompleted: taskDone,
+          title: t.title || t.taskTitle || updatedBlocks[existingIdx].title
+        };
+      } else {
+        while (candidateIdx < candidateHours.length && occupiedHours.has(candidateHours[candidateIdx])) {
+          candidateIdx++;
+        }
+        const hour = candidateIdx < candidateHours.length ? candidateHours[candidateIdx] : 9 + ((candidateIdx * 2) % 12);
+        candidateIdx++;
+        occupiedHours.add(hour);
+
+        const durationMins = t.estimatedMinutes || 45;
+        const sh = String(hour).padStart(2, '0');
+        const totalEndMins = hour * 60 + durationMins;
+        const endH = Math.floor(totalEndMins / 60);
+        const endM = totalEndMins % 60;
+        const eh = String(endH).padStart(2, '0');
+        const em = String(endM).padStart(2, '0');
+
+        updatedBlocks.push({
+          id: t.id ? `blk_${t.id}` : 'blk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          date: dateStr,
+          startTime: `${sh}:00`,
+          endTime: `${eh}:${em}`,
+          subject: t.subject,
+          chapterId: t.chapterId,
+          chapterName: t.chapterName,
+          stageName: t.stageName,
+          stageIndex: t.stageIndex,
+          title: t.title || t.taskTitle || 'Study Task',
+          isCompleted: taskDone
+        });
+        addedCount++;
+      }
     });
 
     setProfiles(prev =>
@@ -859,13 +987,18 @@ export default function App() {
         if (p.id === activeProfile.id) {
           return {
             ...p,
-            calendarBlocks: [...(p.calendarBlocks || []), ...newBlocks]
+            calendarBlocks: updatedBlocks
           };
         }
         return p;
       })
     );
-    showNotification(`Synced ${newBlocks.length} blocks to Calendar Planner! 📅`);
+
+    showNotification(
+      addedCount > 0
+        ? `Synced ${addedCount} task block${addedCount > 1 ? 's' : ''} to Calendar Planner! 📅`
+        : `Daily Tracker & Calendar Planner are fully in sync! 📅✨`
+    );
   };
 
   const handleAddStageToTodayPlan = (
@@ -1277,9 +1410,40 @@ export default function App() {
             }
           }
 
+          // Two-Way Sync: Update Daily Plan for updated.date if exists
+          let updatedDailyPlans = p.dailyPlans || {};
+          const dayPlan = updatedDailyPlans[updated.date];
+          if (dayPlan && dayPlan.tasks) {
+            const syncedTasks = dayPlan.tasks.map(t => {
+              const matchesId = t.id === updated.id || `blk_${t.id}` === updated.id;
+              const matchesTask =
+                (t.title === updated.title || t.taskTitle === updated.title) ||
+                (updated.chapterName &&
+                  t.chapterName === updated.chapterName &&
+                  t.subject === updated.subject &&
+                  (t.stageIndex === updated.stageIndex || t.stageName === updated.stageName));
+              if (matchesId || matchesTask) {
+                return {
+                  ...t,
+                  isCompleted: updated.isCompleted,
+                  completed: updated.isCompleted
+                };
+              }
+              return t;
+            });
+            updatedDailyPlans = {
+              ...updatedDailyPlans,
+              [updated.date]: {
+                ...dayPlan,
+                tasks: syncedTasks
+              }
+            };
+          }
+
           return {
             ...p,
             subjects: updatedSubjects,
+            dailyPlans: updatedDailyPlans,
             calendarBlocks: (p.calendarBlocks || []).map(b => (b.id === updated.id ? updated : b))
           };
         }
@@ -1578,28 +1742,77 @@ export default function App() {
                     <div className="space-y-2">
                       {todayDailyPlan.tasks.map(task => {
                         const isDone = task.isCompleted ?? task.completed ?? false;
+                        const subColor = SUBJECT_COLORS[task.subject]?.accent || '#58a6ff';
+                        const isSyncedToCalendar = (activeProfile?.calendarBlocks || []).some(
+                          b =>
+                            b.date === todayStr &&
+                            (b.id === task.id ||
+                              b.id === `blk_${task.id}` ||
+                              (b.subject === task.subject &&
+                                ((task.chapterId && b.chapterId === task.chapterId) ||
+                                  (task.chapterName && b.chapterName === task.chapterName) ||
+                                  b.title === (task.title || task.taskTitle))))
+                        );
+
                         return (
                           <div
                             key={task.id}
                             onClick={() => handleToggleDailyTask(task.id)}
-                            className={`habit-item cursor-pointer ${isDone ? 'done' : ''}`}
+                            className={`group flex items-start gap-3 rounded-xl border p-2.5 transition-all cursor-pointer ${
+                              isDone
+                                ? 'border-emerald-500/30 bg-emerald-500/10'
+                                : 'border-white/10 bg-[#0d1117] hover:border-white/20 hover:bg-white/[0.02]'
+                            }`}
                           >
                             <input
                               type="checkbox"
                               checked={isDone}
                               onChange={() => {}}
-                              className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
+                              className="mt-0.5 h-4 w-4 rounded accent-[#238636] pointer-events-none shrink-0"
                             />
                             <div className="flex-grow min-w-0">
-                              <div className="text-xs font-bold text-[#f0f6fc] truncate">
-                                {task.subject} • {task.title || task.taskTitle}
+                              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                                <span
+                                  className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+                                  style={{
+                                    backgroundColor: `${subColor}18`,
+                                    color: subColor,
+                                    border: `1px solid ${subColor}30`
+                                  }}
+                                >
+                                  {task.subject}
+                                </span>
+                                {isSyncedToCalendar && (
+                                  <span
+                                    className="inline-flex items-center gap-1 rounded bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-[9px] font-medium text-sky-400"
+                                    title="Synchronized in Calendar Planner"
+                                  >
+                                    <Calendar className="h-2.5 w-2.5" />
+                                    <span>In Calendar</span>
+                                  </span>
+                                )}
+                                {task.stageName && (
+                                  <span className="text-[10px] text-[#8b949e] truncate max-w-[130px]">
+                                    {task.stageName}
+                                  </span>
+                                )}
                               </div>
-                              <div className="text-[11px] text-[#8b949e] truncate">
-                                {task.estimatedMinutes} mins • {task.reasonTag || task.reason || 'CBSE Target'}
+                              <div
+                                className={`text-xs font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
+                                  isDone ? 'line-through text-[#8b949e]' : ''
+                                }`}
+                                title={task.title || task.taskTitle}
+                              >
+                                {task.title || task.taskTitle}
+                              </div>
+                              <div className="mt-1 flex items-center gap-2 text-[10px] text-[#8b949e]">
+                                <span>⏱️ {task.estimatedMinutes} mins</span>
+                                <span>•</span>
+                                <span className="truncate">{task.reasonTag || task.reason || 'CBSE Target'}</span>
                               </div>
                             </div>
                             <span
-                              className={`text-[10px] font-bold shrink-0 ${
+                              className={`text-[10px] font-bold shrink-0 mt-0.5 ${
                                 isDone ? 'text-[#3fb950]' : 'text-[#8b949e]'
                               }`}
                             >
@@ -1609,14 +1822,51 @@ export default function App() {
                         );
                       })}
 
-                      {/* Sync to Calendar button if tasks exist */}
-                      <button
-                        onClick={() => handleSyncPlanToCalendar(todayDailyPlan.tasks)}
-                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] py-2 text-xs font-bold text-[#58a6ff] hover:bg-white/[0.06]"
-                      >
-                        <Calendar className="h-3.5 w-3.5" />
-                        Sync Plan to Calendar
-                      </button>
+                      {/* Sync to Calendar status & action button */}
+                      {(() => {
+                        const syncedCount = todayDailyPlan.tasks.filter(t =>
+                          (activeProfile?.calendarBlocks || []).some(
+                            b =>
+                              b.date === todayStr &&
+                              (b.id === t.id ||
+                                b.id === `blk_${t.id}` ||
+                                (b.subject === t.subject &&
+                                  ((t.chapterId && b.chapterId === t.chapterId) ||
+                                    (t.chapterName && b.chapterName === t.chapterName) ||
+                                    b.title === (t.title || t.taskTitle))))
+                          )
+                        ).length;
+                        const allSynced = syncedCount === todayDailyPlan.tasks.length;
+
+                        return (
+                          <div className="mt-3 flex items-center gap-2">
+                            <button
+                              onClick={() => handleSyncPlanToCalendar(todayDailyPlan.tasks)}
+                              className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl border py-2 text-xs font-bold transition-all ${
+                                allSynced
+                                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                                  : 'border-[#58a6ff]/40 bg-[#58a6ff]/10 text-[#58a6ff] hover:bg-[#58a6ff]/20'
+                              }`}
+                            >
+                              {allSynced ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Calendar className="h-3.5 w-3.5" />}
+                              <span>
+                                {allSynced
+                                  ? `Synced with Calendar (${syncedCount}/${todayDailyPlan.tasks.length})`
+                                  : `Sync Plan to Calendar (${todayDailyPlan.tasks.length - syncedCount} pending)`}
+                              </span>
+                            </button>
+                            {allSynced && (
+                              <button
+                                onClick={() => setActiveTab('planner')}
+                                className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-bold text-[#8b949e] hover:text-[#f0f6fc] hover:bg-white/[0.08]"
+                                title="Open Calendar Planner"
+                              >
+                                View
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1633,10 +1883,21 @@ export default function App() {
                             className="h-4 w-4 rounded accent-[#238636] pointer-events-none"
                           />
                           <div className="flex-grow min-w-0">
-                            <div className="text-xs font-bold text-[#f0f6fc] truncate">
-                              {item.subject} • {item.chapterName.split(':')[0] || item.chapterName}
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span
+                                className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+                                style={{
+                                  backgroundColor: `${SUBJECT_COLORS[item.subject]?.accent || '#58a6ff'}18`,
+                                  color: SUBJECT_COLORS[item.subject]?.accent || '#58a6ff'
+                                }}
+                              >
+                                {item.subject}
+                              </span>
                             </div>
-                            <div className="text-[11px] text-[#8b949e] truncate">
+                            <div className="text-xs font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words">
+                              {item.chapterName}
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-[#8b949e] truncate">
                               {item.stageName}
                             </div>
                           </div>
@@ -1813,6 +2074,7 @@ export default function App() {
             onAddSession={handleAddSession}
             onOpenDailyPlan={() => setShowDailyPlanModal(true)}
             onToggleDailyTask={handleToggleDailyTask}
+            onSyncPlanToCalendar={handleSyncPlanToCalendar}
           />
         )}
 

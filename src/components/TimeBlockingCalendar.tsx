@@ -30,6 +30,7 @@ interface TimeBlockingCalendarProps {
   onAddSession: (session: Omit<StudySession, 'id'>) => void;
   onOpenDailyPlan: () => void;
   onToggleDailyTask?: (taskId: string) => void;
+  onSyncPlanToCalendar?: (tasks: DailyTask[]) => void;
 }
 
 const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
@@ -43,7 +44,8 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
   onUpdateBlock,
   onAddSession,
   onOpenDailyPlan,
-  onToggleDailyTask
+  onToggleDailyTask,
+  onSyncPlanToCalendar
 }) => {
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
   const [currentDate, setCurrentDate] = useState<Date>(() => {
@@ -301,36 +303,72 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
               </div>
             </div>
 
-            <button
-              onClick={onOpenDailyPlan}
-              className="self-start sm:self-auto inline-flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/15 px-2.5 py-1 text-xs font-bold text-sky-300 hover:bg-sky-500/25"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>Full Daily Plan</span>
-            </button>
+            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+              {(() => {
+                const unscheduled = todayTasks.filter(
+                  t =>
+                    !(t.completed || t.isCompleted) &&
+                    !calendarBlocks.some(
+                      b =>
+                        b.date === todayStr &&
+                        (b.id === t.id ||
+                          b.id === `blk_${t.id}` ||
+                          b.title === (t.title || t.taskTitle) ||
+                          (b.chapterName === t.chapterName && b.subject === t.subject))
+                    )
+                );
+                if (unscheduled.length > 0 && onSyncPlanToCalendar) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => onSyncPlanToCalendar(todayTasks)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-xs font-bold text-sky-300 hover:bg-sky-500/25"
+                      title="Automatically schedule all unscheduled tasks into open time slots"
+                    >
+                      <CalendarIcon className="h-3 w-3" />
+                      <span>Sync All ({unscheduled.length}) to Calendar</span>
+                    </button>
+                  );
+                }
+                return null;
+              })()}
+
+              <button
+                onClick={onOpenDailyPlan}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-bold text-[#8b949e] hover:text-[#f0f6fc] hover:bg-white/[0.08]"
+              >
+                <Sparkles className="h-3 w-3 text-sky-400" />
+                <span>Edit Daily Plan</span>
+              </button>
+            </div>
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {todayTasks.map(task => {
               const isDone = !!(task.completed || task.isCompleted);
               const hasCalendarBlock = calendarBlocks.some(
-                b => b.date === todayStr && (b.title === task.title || (b.chapterName === task.chapterName && b.subject === task.subject))
+                b =>
+                  b.date === todayStr &&
+                  (b.id === task.id ||
+                    b.id === `blk_${task.id}` ||
+                    b.title === (task.title || task.taskTitle) ||
+                    (b.chapterName === task.chapterName && b.subject === task.subject))
               );
 
               return (
                 <div
                   key={task.id}
-                  className={`flex items-center justify-between rounded-xl border p-2.5 transition-all ${
+                  className={`flex items-start justify-between rounded-xl border p-2.5 transition-all gap-2 ${
                     isDone
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                       : 'border-white/10 bg-[#0d1117] text-[#f0f6fc]'
                   }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0 pr-2">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => onToggleDailyTask?.(task.id)}
-                      className="shrink-0 text-[#8b949e] hover:text-[#58a6ff]"
+                      className="shrink-0 text-[#8b949e] hover:text-[#58a6ff] mt-0.5"
                     >
                       {isDone ? (
                         <CheckSquare className="h-4 w-4 text-emerald-400" />
@@ -338,14 +376,23 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                         <Square className="h-4 w-4" />
                       )}
                     </button>
-                    <div className="min-w-0">
-                      <div className={`text-xs font-bold truncate ${isDone ? 'line-through text-[#8b949e]' : ''}`}>
-                        {task.taskTitle || task.title}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-sky-400">
+                          {task.subject}
+                        </span>
+                        {hasCalendarBlock && (
+                          <span className="text-[9px] text-emerald-400/90 font-semibold">• In Planner</span>
+                        )}
+                        <span className="text-[10px] text-[#8b949e]">• {task.estimatedMinutes}m</span>
                       </div>
-                      <div className="flex items-center gap-1.5 text-[10px] text-[#8b949e]">
-                        <span className="font-semibold text-sky-400">{task.subject}</span>
-                        <span>•</span>
-                        <span>{task.estimatedMinutes}m</span>
+                      <div
+                        className={`text-xs font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
+                          isDone ? 'line-through text-[#8b949e]' : ''
+                        }`}
+                        title={task.taskTitle || task.title}
+                      >
+                        {task.taskTitle || task.title}
                       </div>
                     </div>
                   </div>
@@ -463,12 +510,21 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                             </button>
                           </div>
 
-                          <div className="mt-1 font-bold text-xs text-[#f0f6fc] truncate">
+                          <div
+                            className={`mt-1 text-[11px] font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
+                              b.isCompleted ? 'line-through text-[#8b949e]' : ''
+                            }`}
+                            title={b.title}
+                          >
                             {b.title}
                           </div>
 
-                          <div className="text-[10px] text-[#8b949e] truncate">
-                            {b.subject} {b.chapterName ? `• ${b.chapterName}` : ''}
+                          <div
+                            className="mt-0.5 text-[10px] text-[#8b949e] truncate"
+                            title={`${b.subject}${b.chapterName ? ` • ${b.chapterName}` : ''}`}
+                          >
+                            <span className="font-semibold" style={{ color: color.accent }}>{b.subject}</span>
+                            {b.chapterName ? <span> • {b.chapterName}</span> : ''}
                           </div>
 
                           <div className="mt-2 flex items-center justify-between">
@@ -584,17 +640,23 @@ export const TimeBlockingCalendar: React.FC<TimeBlockingCalendarProps> = ({
                                     : 'border-sky-500/30 bg-sky-500/5'
                                 }`}
                               >
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold text-[#f0f6fc]">
+                                <div className="flex-1 min-w-0 pr-3">
+                                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                                    <span
+                                      className={`text-xs font-medium leading-snug text-[#f0f6fc] line-clamp-2 break-words ${
+                                        b.isCompleted ? 'line-through text-[#8b949e]' : ''
+                                      }`}
+                                      title={b.title}
+                                    >
                                       {b.title}
                                     </span>
-                                    <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#58a6ff]">
+                                    <span className="rounded bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 text-[9px] font-bold text-[#58a6ff] shrink-0">
                                       {b.subject}
                                     </span>
                                   </div>
                                   <div className="text-[11px] text-[#8b949e]">
-                                    {b.startTime} - {b.endTime} • {b.chapterName}
+                                    <span className="font-mono">{b.startTime} - {b.endTime}</span>
+                                    {b.chapterName && <span> • {b.chapterName}</span>}
                                   </div>
                                 </div>
 
