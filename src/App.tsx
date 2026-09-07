@@ -653,11 +653,13 @@ export default function App() {
     if (!plan) return;
 
     let isNowDone = false;
+    let toggledTask: DailyTask | undefined;
     const updatedTasks = plan.tasks.map(t => {
       if (t.id === taskId) {
         const nextVal = !(t.isCompleted ?? t.completed);
         isNowDone = nextVal;
-        return { ...t, isCompleted: nextVal, completed: nextVal };
+        toggledTask = { ...t, isCompleted: nextVal, completed: nextVal };
+        return toggledTask;
       }
       return t;
     });
@@ -665,8 +667,40 @@ export default function App() {
     setProfiles(prev =>
       prev.map(p => {
         if (p.id === activeProfile.id) {
+          let updatedSubjects = p.subjects;
+          if (toggledTask && toggledTask.chapterId && toggledTask.subject && p.subjects[toggledTask.subject]) {
+            const subName = toggledTask.subject;
+            const subData = p.subjects[subName];
+            const stages = p.customStages[subName] || DEFAULT_STAGES[subName] || [];
+
+            let stageIdx = toggledTask.stageIndex;
+            if (stageIdx === undefined && toggledTask.stageName) {
+              stageIdx = stages.findIndex(s => s === toggledTask?.stageName);
+            }
+
+            if (stageIdx !== undefined && stageIdx >= 0) {
+              const updatedChapters = subData.chapters.map(ch => {
+                if (ch.id === toggledTask?.chapterId || ch.name === toggledTask?.chapterName) {
+                  const newStates = [...(ch.stageStates || [])];
+                  newStates[stageIdx] = isNowDone ? 2 : 1;
+                  return { ...ch, stageStates: newStates };
+                }
+                return ch;
+              });
+
+              updatedSubjects = {
+                ...p.subjects,
+                [subName]: {
+                  ...subData,
+                  chapters: updatedChapters
+                }
+              };
+            }
+          }
+
           return {
             ...p,
+            subjects: updatedSubjects,
             dailyPlans: {
               ...(p.dailyPlans || {}),
               [today]: {

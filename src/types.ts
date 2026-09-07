@@ -54,6 +54,15 @@ export type EnergyLevel = 'Low' | 'Medium' | 'High';
 
 export type PlanDiversityMode = 'balanced' | 'dual' | 'focus';
 
+export type StageFocusCategory =
+  | 'all'
+  | 'in_progress'
+  | 'theory'
+  | 'ncert'
+  | 'advanced'
+  | 'practice'
+  | 'custom';
+
 export type ExamMode = 'Standard' | 'Exam Mode' | 'Panic Mode' | 'Mid-terms' | 'Pre-boards' | 'Final Boards';
 
 export type MistakeReason =
@@ -91,6 +100,7 @@ export interface DailyTask {
   title?: string;
   taskTitle?: string;
   stageName?: string;
+  stageIndex?: number;
   estimatedMinutes: number;
   completed?: boolean;
   isCompleted?: boolean;
@@ -105,6 +115,8 @@ export interface DailyPlan {
   energyLevel: EnergyLevel;
   diversityMode?: PlanDiversityMode;
   focusSubject?: SubjectName;
+  stageFocus?: StageFocusCategory;
+  selectedStages?: string[];
   tasks: DailyTask[];
   generatedAt: string;
   targetTotalMinutes: number;

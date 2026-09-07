@@ -5,9 +5,10 @@ import {
   DailyPlan,
   SubjectName,
   PlanDiversityMode,
+  StageFocusCategory,
   Chapter
 } from '../types';
-import { getRankedChapters, RankedChapterItem, calculateChapterPriorityScore, getChapterMistakesCount } from './prioritizer';
+import { getRankedChapters, RankedChapterItem } from './prioritizer';
 import { DEFAULT_STAGES, SUBJECTS } from '../data/cbseData';
 import { getDaysRemaining } from './helpers';
 
@@ -21,11 +22,144 @@ interface SubjectUrgencyInfo {
   candidates: RankedChapterItem[];
 }
 
+export interface TargetStageResult {
+  stageName: string;
+  stageIndex: number;
+  isMatch: boolean;
+  stageState: number; // 0: Pending, 1: In Progress, 2: Done
+}
+
+/**
+ * Finds the most relevant stage for a given chapter based on stage focus or custom selected stages.
+ */
+export function findTargetStageForChapter(
+  chapter: Chapter,
+  subject: SubjectName,
+  profile: UserProfile,
+  stageFocus: StageFocusCategory = 'all',
+  selectedCustomStages: string[] = []
+): TargetStageResult {
+  const stages = profile.customStages[subject] || DEFAULT_STAGES[subject] || [];
+  if (stages.length === 0) {
+    return { stageName: 'NCERT Practice', stageIndex: 0, isMatch: true, stageState: 0 };
+  }
+
+  const states = chapter.stageStates || [];
+
+  const matchesKeyword = (name: string, keywords: string[]) => {
+    const lower = name.toLowerCase();
+    return keywords.some(k => lower.includes(k));
+  };
+
+  // 1. Custom selected stages
+  if (stageFocus === 'custom' && selectedCustomStages.length > 0) {
+    const matchedIndices: number[] = [];
+    stages.forEach((st, idx) => {
+      if (selectedCustomStages.includes(st)) {
+        matchedIndices.push(idx);
+      }
+    });
+
+    if (matchedIndices.length > 0) {
+      // Prioritize In Progress (1)
+      const inProg = matchedIndices.find(idx => states[idx] === 1);
+      if (inProg !== undefined) {
+        return { stageName: stages[inProg], stageIndex: inProg, isMatch: true, stageState: 1 };
+      }
+      // Then Pending (0)
+      const pending = matchedIndices.find(idx => states[idx] === 0);
+      if (pending !== undefined) {
+        return { stageName: stages[pending], stageIndex: pending, isMatch: true, stageState: 0 };
+      }
+      // If all chosen stages are done (2), schedule first chosen for revision
+      const firstChosen = matchedIndices[0];
+      return {
+        stageName: stages[firstChosen],
+        stageIndex: firstChosen,
+        isMatch: true,
+        stageState: states[firstChosen] ?? 2
+      };
+    }
+  }
+
+  // 2. In-Progress only
+  if (stageFocus === 'in_progress') {
+    for (let i = 0; i < stages.length; i++) {
+      if (states[i] === 1) {
+        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 1 };
+      }
+    }
+  }
+
+  // 3. Theory / Concepts (Lectures, One Shot, Theory, Notes, Reading)
+  if (stageFocus === 'theory') {
+    for (let i = 0; i < stages.length; i++) {
+      if (matchesKeyword(stages[i], ['lecture', 'shot', 'theory', 'reading', 'saransh', 'formula', 'notes', 'concept'])) {
+        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
+      }
+    }
+    return { stageName: stages[0], stageIndex: 0, isMatch: true, stageState: states[0] ?? 0 };
+  }
+
+  // 4. NCERT / Standard Questions
+  if (stageFocus === 'ncert') {
+    for (let i = 0; i < stages.length; i++) {
+      if (matchesKeyword(stages[i], ['ncert', 'line by line', 'solutions', 'prashnottar', 'back questions'])) {
+        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
+      }
+    }
+    const idx = Math.min(1, stages.length - 1);
+    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
+  }
+
+  // 5. Advanced / Modules / Exemplar / HOTS
+  if (stageFocus === 'advanced') {
+    for (let i = 0; i < stages.length; i++) {
+      if (matchesKeyword(stages[i], ['module', 'exemplar', 'hots', 'agarwal', 'chand', 'numericals', 'map work', 'shabdarth'])) {
+        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
+      }
+    }
+    const idx = Math.min(2, stages.length - 1);
+    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
+  }
+
+  // 6. PYQ / Mock / Practice / Revision
+  if (stageFocus === 'practice') {
+    for (let i = stages.length - 1; i >= 0; i--) {
+      if (matchesKeyword(stages[i], ['pyq', 'sample', 'paper', 'practice', 'test', 'patra', 'previous'])) {
+        return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: states[i] ?? 0 };
+      }
+    }
+    const idx = stages.length - 1;
+    return { stageName: stages[idx], stageIndex: idx, isMatch: true, stageState: states[idx] ?? 0 };
+  }
+
+  // 7. Default ('all'): First finish what's In Progress (1)
+  for (let i = 0; i < stages.length; i++) {
+    if (states[i] === 1) {
+      return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 1 };
+    }
+  }
+
+  // Then earliest pending stage (0)
+  for (let i = 0; i < stages.length; i++) {
+    if (states[i] === 0) {
+      return { stageName: stages[i], stageIndex: i, isMatch: true, stageState: 0 };
+    }
+  }
+
+  // If all completed (2), return the last stage (PYQ/Practice) for revision
+  const lastIdx = stages.length - 1;
+  return { stageName: stages[lastIdx], stageIndex: lastIdx, isMatch: false, stageState: 2 };
+}
+
 export function generateDailyPlan(
   profile: UserProfile,
   energyLevel: EnergyLevel = 'Medium',
   diversityMode: PlanDiversityMode = 'balanced',
-  focusSubject?: SubjectName
+  focusSubject?: SubjectName,
+  stageFocus: StageFocusCategory = 'all',
+  selectedCustomStages: string[] = []
 ): DailyPlan {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -76,8 +210,17 @@ export function generateDailyPlan(
     // Chapters for this subject sorted by priority
     let subChapters = allRanked.filter(item => item.subject === sub);
 
-    // If Low energy: prioritize review, formulas, mistakes, or medium difficulty chapters over pure unstarted Hard ones
-    if (energyLevel === 'Low') {
+    // If stage focus is active, re-rank chapters that have matching pending stages
+    if (stageFocus !== 'all') {
+      subChapters = [...subChapters].sort((a, b) => {
+        const aTarget = findTargetStageForChapter(a.chapter, sub, profile, stageFocus, selectedCustomStages);
+        const bTarget = findTargetStageForChapter(b.chapter, sub, profile, stageFocus, selectedCustomStages);
+        const aScore = (aTarget.isMatch && aTarget.stageState !== 2 ? 60 : 0) + (a.mistakesCount > 0 ? 20 : 0) + a.priorityScore;
+        const bScore = (bTarget.isMatch && bTarget.stageState !== 2 ? 60 : 0) + (b.mistakesCount > 0 ? 20 : 0) + b.priorityScore;
+        return bScore - aScore;
+      });
+    } else if (energyLevel === 'Low') {
+      // If Low energy: prioritize review, formulas, mistakes, or medium difficulty chapters
       subChapters = [...subChapters].sort((a, b) => {
         const aScore = (a.mistakesCount > 0 ? 35 : 0) + (a.percentDone > 40 ? 25 : 0);
         const bScore = (b.mistakesCount > 0 ? 35 : 0) + (b.percentDone > 40 ? 25 : 0);
@@ -90,14 +233,14 @@ export function generateDailyPlan(
 
     // Exam proximity factor
     if (daysLeft >= 0) {
-      if (daysLeft <= 2) subjectScore += 55; // Exam in 48 hours!
+      if (daysLeft <= 2) subjectScore += 55;
       else if (daysLeft <= 7) subjectScore += 38;
       else if (daysLeft <= 14) subjectScore += 24;
       else if (daysLeft <= 30) subjectScore += 12;
       else subjectScore += 4;
     }
 
-    // Lagging syllabus factor (lower completion = more urgent catch-up)
+    // Lagging syllabus factor
     subjectScore += Math.round((100 - completionPercent) * 0.35);
 
     // Mistakes bonus
@@ -123,22 +266,20 @@ export function generateDailyPlan(
   // 3. Determine subject limits according to diversity mode
   const selectedTasks: DailyTask[] = [];
   const subjectTaskCounts = new Map<SubjectName, number>();
-  const isPanic = subjectsUrgency.some(s => s.daysLeft <= 2 && s.daysLeft >= 0);
 
-  // Maximum allowed tasks per subject to guarantee MULTI-SUBJECT DIVERSITY
   let maxTasksPerSubject = 2;
   if (diversityMode === 'balanced') {
     if (targetCount <= 3) {
-      maxTasksPerSubject = 1; // 3 tasks across 3 different subjects!
+      maxTasksPerSubject = 1;
     } else if (targetCount <= 5) {
-      maxTasksPerSubject = 2; // 4-5 tasks across at least 3 distinct subjects!
+      maxTasksPerSubject = 2;
     } else {
-      maxTasksPerSubject = 2; // 6 tasks across at least 3-4 distinct subjects!
+      maxTasksPerSubject = 2;
     }
   } else if (diversityMode === 'dual') {
-    maxTasksPerSubject = Math.ceil(targetCount / 2); // Split across 2 subjects
+    maxTasksPerSubject = Math.ceil(targetCount / 2);
   } else if (diversityMode === 'focus') {
-    maxTasksPerSubject = targetCount; // Single subject deep-dive
+    maxTasksPerSubject = targetCount;
   }
 
   // Determine eligible subjects list based on diversityMode
@@ -155,9 +296,7 @@ export function generateDailyPlan(
   // Scheduled time slots across a balanced day
   const timeSlots = ['09:00', '11:15', '14:30', '16:45', '19:00', '20:30', '21:45'];
 
-  // 4. Interleaved Round-Robin Multi-Subject Selection
-  // We make multiple passes across eligible subjects so tasks rotate naturally
-  // (e.g. Task 1: Math, Task 2: Science, Task 3: Social Science, Task 4: Math, Task 5: English)
+  // 4. Interleaved Round-Robin Selection
   let loopSafety = 0;
   while (selectedTasks.length < targetCount && loopSafety < 50) {
     loopSafety++;
@@ -168,8 +307,6 @@ export function generateDailyPlan(
 
       const currentCount = subjectTaskCounts.get(subInfo.subject) || 0;
 
-      // In balanced mode, check max task limit for this subject
-      // (Unless all subjects have hit their limit and we still need tasks)
       if (diversityMode === 'balanced' && currentCount >= maxTasksPerSubject) {
         continue;
       }
@@ -177,17 +314,28 @@ export function generateDailyPlan(
         continue;
       }
 
-      // Find the next unpicked chapter from this subject
       const alreadyPickedChapterIds = new Set(
         selectedTasks.filter(t => t.subject === subInfo.subject).map(t => t.chapterId)
       );
 
-      // Prefer chapters with incomplete stages or mistakes
-      let nextCandidate = subInfo.candidates.find(
-        c => !alreadyPickedChapterIds.has(c.chapter.id) && c.percentDone < 100
-      );
+      // 1st Preference: chapters matching the chosen stage focus and not yet completed
+      let nextCandidate = subInfo.candidates.find(c => {
+        if (alreadyPickedChapterIds.has(c.chapter.id)) return false;
+        if (stageFocus !== 'all') {
+          const target = findTargetStageForChapter(c.chapter, subInfo.subject, profile, stageFocus, selectedCustomStages);
+          return target.isMatch && target.stageState !== 2;
+        }
+        return c.percentDone < 100;
+      });
 
-      // If all chapters in this subject are 100% complete, pick one for revision/mock
+      // 2nd Preference: any unpicked incomplete chapter
+      if (!nextCandidate) {
+        nextCandidate = subInfo.candidates.find(
+          c => !alreadyPickedChapterIds.has(c.chapter.id) && c.percentDone < 100
+        );
+      }
+
+      // 3rd Preference: unpicked chapter even if 100% (for active recall / practice)
       if (!nextCandidate) {
         nextCandidate = subInfo.candidates.find(
           c => !alreadyPickedChapterIds.has(c.chapter.id)
@@ -196,29 +344,34 @@ export function generateDailyPlan(
 
       if (nextCandidate) {
         const item = nextCandidate;
-        const stages = profile.customStages[item.subject] || DEFAULT_STAGES[item.subject] || [];
-        let pendingStageName = 'NCERT Problem Practice';
-        for (let i = 0; i < stages.length; i++) {
-          if ((item.chapter.stageStates || [])[i] !== 2) {
-            pendingStageName = stages[i];
-            break;
-          }
-        }
+        const targetStage = findTargetStageForChapter(
+          item.chapter,
+          item.subject,
+          profile,
+          stageFocus,
+          selectedCustomStages
+        );
+
+        const pendingStageName = targetStage.stageName;
+        const targetStageIndex = targetStage.stageIndex;
 
         let taskTitle = `${pendingStageName} — ${item.chapter.name}`;
         let reasonTag = item.reasons[0] || item.urgencyTag;
 
-        if (item.mistakesCount > 0) {
-          taskTitle = `Review ${item.mistakesCount} logged mistake${item.mistakesCount > 1 ? 's' : ''} & solve ${item.chapter.name}`;
+        if (targetStage.stageState === 1) {
+          taskTitle = `Resume: ${pendingStageName} (${item.chapter.name})`;
+          reasonTag = '⏳ In Progress Stage';
+        } else if (item.mistakesCount > 0) {
+          taskTitle = `${pendingStageName} & Mistakes Review (${item.chapter.name})`;
           reasonTag = `⚠️ Weak Chapter (${item.mistakesCount} Mistakes)`;
         } else if (item.difficulty === 'Hard') {
           taskTitle = `Deep Work: ${pendingStageName} (${item.chapter.name})`;
           reasonTag = '🔥 Hard Difficulty';
         } else if (item.percentDone === 0) {
-          taskTitle = `Foundation: ${pendingStageName} for ${item.chapter.name}`;
+          taskTitle = `Start: ${pendingStageName} for ${item.chapter.name}`;
           reasonTag = '⚡ 0% Syllabus Coverage';
-        } else if (item.percentDone === 100) {
-          taskTitle = `Active Recall & PYQ Revision: ${item.chapter.name}`;
+        } else if (item.percentDone === 100 || targetStage.stageState === 2) {
+          taskTitle = `Active Recall: ${pendingStageName} (${item.chapter.name})`;
           reasonTag = '🔄 Retention & Sample Practice';
         }
 
@@ -238,6 +391,7 @@ export function generateDailyPlan(
           title: taskTitle,
           taskTitle,
           stageName: pendingStageName,
+          stageIndex: targetStageIndex,
           estimatedMinutes: duration,
           completed: false,
           isCompleted: false,
@@ -252,25 +406,27 @@ export function generateDailyPlan(
       }
     }
 
-    // If no tasks could be added in this pass due to maxTasksPerSubject, loosen the constraint by +1
     if (addedInThisPass === 0) {
       maxTasksPerSubject++;
     }
   }
 
-  // 5. Fallback safety if no tasks could be formed (e.g. empty profile or complete syllabus)
+  // 5. Fallback safety if no tasks could be formed
   if (selectedTasks.length === 0) {
     const fallbackSubjects: SubjectName[] = ['Mathematics', 'Physics', 'Chemistry', 'Social Science', 'English'];
     for (let i = 0; i < Math.min(targetCount, fallbackSubjects.length); i++) {
       const sub = fallbackSubjects[i];
+      const stages = profile.customStages[sub] || DEFAULT_STAGES[sub] || [];
+      const fallbackStage = stages[Math.min(1, stages.length - 1)] || 'Sample Papers';
       selectedTasks.push({
         id: 'task_' + Date.now() + '_' + i,
         subject: sub,
         chapterName: 'Full Syllabus Board Revision',
         chapterId: 'fallback_' + i,
-        title: `CBSE Sample Paper & PYQ Practice for ${sub}`,
-        taskTitle: `CBSE Sample Paper & PYQ Practice for ${sub}`,
-        stageName: 'Sample Papers',
+        title: `${fallbackStage} — CBSE Practice for ${sub}`,
+        taskTitle: `${fallbackStage} — CBSE Practice for ${sub}`,
+        stageName: fallbackStage,
+        stageIndex: 0,
         estimatedMinutes: defaultDuration,
         completed: false,
         isCompleted: false,
@@ -289,6 +445,8 @@ export function generateDailyPlan(
     energyLevel,
     diversityMode,
     focusSubject: diversityMode === 'focus' ? focusSubject : undefined,
+    stageFocus,
+    selectedStages: selectedCustomStages,
     tasks: selectedTasks,
     generatedAt: new Date().toISOString(),
     targetTotalMinutes: totalMins,
